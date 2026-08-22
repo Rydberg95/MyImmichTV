@@ -485,6 +485,106 @@
   });
   $('#btnInfo').addEventListener('click', () => command('info'));
 
+  // ---- settings (slideshow intervals, screensaver source/videos) ----
+
+  const settingsSheet = $('#settingsSheet');
+  const dreamSel = $('#dreamSource');
+
+  function setSettingsStatus(text, isError) {
+    const el = $('#settingsStatus');
+    el.textContent = text || '';
+    el.classList.toggle('error', !!isError);
+  }
+
+  async function saveSettings(patch, okText) {
+    setSettingsStatus('Saving…');
+    try {
+      await api('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      setSettingsStatus(okText);
+    } catch (e) {
+      setSettingsStatus('Save failed', true);
+    }
+  }
+
+  async function openSettings() {
+    settingsSheet.classList.remove('hidden');
+    setSettingsStatus('');
+    dreamSel.innerHTML = '<option value="">Loading…</option>';
+    try {
+      const [cfg, albums] = await Promise.all([api('/settings'), api('/albums')]);
+      $('#viewerInterval').value = cfg.slideshowSeconds;
+      $('#dreamInterval').value = cfg.dreamSeconds;
+      $('#dreamVideos').checked = !!cfg.dreamIncludeVideos;
+      dreamSel.innerHTML = '';
+      [['', 'Timeline (newest first)'], ['favorites', 'Favorites']].forEach((pair) => {
+        const o = document.createElement('option');
+        o.value = pair[0];
+        o.textContent = pair[1];
+        dreamSel.appendChild(o);
+      });
+      if (albums.length) {
+        const g = document.createElement('optgroup');
+        g.label = 'Albums';
+        albums.forEach((al) => {
+          const o = document.createElement('option');
+          o.value = al.id;
+          o.textContent = al.name + ' · ' + al.count;
+          g.appendChild(o);
+        });
+        dreamSel.appendChild(g);
+      }
+      const current = cfg.dreamSourceId || '';
+      dreamSel.value = current;
+      // album was deleted server-side: fall back to timeline in the picker
+      if (dreamSel.value !== current) dreamSel.value = '';
+    } catch (e) {
+      setSettingsStatus('Could not load settings', true);
+    }
+  }
+
+  $('#viewerInterval').addEventListener('change', () => {
+    const v = parseInt($('#viewerInterval').value, 10);
+    if (!(v >= 3 && v <= 120)) { setSettingsStatus('Viewing interval must be 3–120 s', true); return; }
+    saveSettings({ slideshowSeconds: v }, 'Viewing slideshow: ' + v + ' s per photo');
+  });
+
+  $('#dreamInterval').addEventListener('change', () => {
+    const v = parseInt($('#dreamInterval').value, 10);
+    if (!(v >= 5 && v <= 300)) { setSettingsStatus('Screensaver interval must be 5–300 s', true); return; }
+    saveSettings({ dreamSeconds: v }, 'Screensaver: ' + v + ' s per photo (next time it runs)');
+  });
+
+  $('#dreamVideos').addEventListener('change', () => {
+    const on = $('#dreamVideos').checked;
+    saveSettings(
+      { dreamIncludeVideos: on },
+      on ? 'Videos will play in the screensaver (next time it runs)'
+         : 'Videos are excluded from the screensaver (next time it runs)'
+    );
+  });
+
+  dreamSel.addEventListener('change', () => {
+    const id = dreamSel.value;
+    let name = '';
+    if (id === 'favorites') name = 'Favorites';
+    else if (id) name = dreamSel.selectedOptions[0].textContent.replace(/ · \d+$/, '');
+    saveSettings(
+      { dreamSourceId: id, dreamSourceName: name },
+      name ? 'Screensaver now uses ' + name + ' (next time it runs)'
+           : 'Screensaver now uses your timeline (next time it runs)'
+    );
+  });
+
+  $('#btnSettings').addEventListener('click', openSettings);
+  $('#settingsClose').addEventListener('click', () => settingsSheet.classList.add('hidden'));
+  settingsSheet.addEventListener('click', (e) => {
+    if (e.target === settingsSheet) settingsSheet.classList.add('hidden');
+  });
+
   function syncControls() {
     $('#btnPlay').classList.toggle('on', !!(state.tv && state.tv.slideshow));
     $('#btnShuffle').classList.toggle('on', !!(state.tv && state.tv.shuffle));

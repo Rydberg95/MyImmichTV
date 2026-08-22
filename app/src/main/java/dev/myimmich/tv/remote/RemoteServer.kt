@@ -33,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -220,6 +221,36 @@ class RemoteServer(
                 } else {
                     call.respond(HttpStatusCode.BadRequest)
                 }
+            }
+            get("/r/{token}/settings") {
+                if (!authorized(call)) return@get
+                call.respond(
+                    SettingsDto(
+                        slideshowSeconds = settings.slideshowSeconds.first(),
+                        dreamSeconds = settings.dreamSeconds.first(),
+                        dreamIncludeVideos = settings.dreamIncludeVideos.first(),
+                        dreamSourceId = settings.dreamSourceId.first(),
+                        dreamSourceName = settings.dreamSourceName.first(),
+                    )
+                )
+            }
+            post("/r/{token}/settings") {
+                if (!authorized(call)) return@post
+                val body = call.receiveText()
+                val dto = runCatching {
+                    json.decodeFromString<SettingsUpdateDto>(body)
+                }.getOrNull()
+                if (dto == null) {
+                    call.respond(HttpStatusCode.BadRequest)
+                    return@post
+                }
+                if (dto.slideshowSeconds != null) settings.setSlideshowSeconds(dto.slideshowSeconds)
+                if (dto.dreamSeconds != null) settings.setDreamSeconds(dto.dreamSeconds)
+                if (dto.dreamIncludeVideos != null) settings.setDreamIncludeVideos(dto.dreamIncludeVideos)
+                if (dto.dreamSourceId != null) {
+                    settings.setDreamSource(dto.dreamSourceId, dto.dreamSourceName ?: "")
+                }
+                call.respond(HttpStatusCode.OK)
             }
             get("/r/{token}/buckets") {
                 val client = authorizedClient(call) ?: return@get

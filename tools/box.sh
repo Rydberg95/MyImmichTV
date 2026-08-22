@@ -44,11 +44,18 @@ case "${1:-}" in
   log)
     adb -s "$BOX_SERIAL" logcat -d -s ImmichTV:D -s ImmichTV:W | tail -n "${2:-30}"
     ;;
+  dream)
+    # Google TV hides 3rd-party DreamServices from the screensaver picker;
+    # set ours as the system dream component directly (survives reboot).
+    adb -s "$BOX_SERIAL" shell settings put secure screensaver_components \
+      dev.myimmich.tv/dev.myimmich.tv.SlideshowDreamService
+    adb -s "$BOX_SERIAL" shell settings get secure screensaver_components
+    ;;
   devices)
     adb devices -l
     ;;
   *)
-    echo "usage: BOX_SERIAL=ip:port TV_HOST=ip box.sh {devices|install|restart|pair|state|cmd '<json>'|shot [file]|log [n]}" >&2
+    echo "usage: BOX_SERIAL=ip:port TV_HOST=ip box.sh {devices|install|restart|pair|state|cmd '<json>'|shot [file]|log [n]|dream}" >&2
     echo ""
     echo "env: BOX_SERIAL (default $BOX_SERIAL), TV_HOST (default $TV_HOST)"
     echo "The adb port changes when the box reboots; find it under"

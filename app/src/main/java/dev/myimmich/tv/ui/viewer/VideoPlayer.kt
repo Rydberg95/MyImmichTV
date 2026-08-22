@@ -26,7 +26,9 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer.DecoderInitializa
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import java.util.Locale
 
-private class RotatingVideoFrame(context: Context) : FrameLayout(context) {
+/** TextureView frame with manual aspect-fit + rotation; shared by viewer and screensaver
+ *  (SurfaceView/PlayerView renders black on the Amlogic box — see README). */
+class RotatingVideoFrame(context: Context) : FrameLayout(context) {
 
     private val texture: TextureView = TextureView(context)
     private var videoW = 0

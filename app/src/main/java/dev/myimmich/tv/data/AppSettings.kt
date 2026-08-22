@@ -29,6 +29,10 @@ class AppSettings(private val context: Context) {
         val slideshowShuffle = booleanPreferencesKey("slideshow_shuffle")
         val highQuality = booleanPreferencesKey("high_quality")
         val remoteEnabled = booleanPreferencesKey("remote_enabled")
+        val dreamSourceId = stringPreferencesKey("dream_source_id")
+        val dreamSourceName = stringPreferencesKey("dream_source_name")
+        val dreamSeconds = intPreferencesKey("dream_seconds")
+        val dreamIncludeVideos = booleanPreferencesKey("dream_include_videos")
     }
 
     val serverConfig: Flow<ServerConfig?> = context.dataStore.data.map { p ->
@@ -50,6 +54,12 @@ class AppSettings(private val context: Context) {
     val slideshowSeconds: Flow<Int> = context.dataStore.data.map { it[Keys.slideshowSeconds] ?: 10 }
     val slideshowShuffle: Flow<Boolean> = context.dataStore.data.map { it[Keys.slideshowShuffle] ?: false }
     val remoteEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.remoteEnabled] ?: true }
+
+    /** "" = timeline, "favorites" = favorites, anything else = album id */
+    val dreamSourceId: Flow<String> = context.dataStore.data.map { it[Keys.dreamSourceId] ?: "" }
+    val dreamSourceName: Flow<String> = context.dataStore.data.map { it[Keys.dreamSourceName] ?: "" }
+    val dreamSeconds: Flow<Int> = context.dataStore.data.map { it[Keys.dreamSeconds] ?: 10 }
+    val dreamIncludeVideos: Flow<Boolean> = context.dataStore.data.map { it[Keys.dreamIncludeVideos] ?: false }
 
     suspend fun saveServer(config: ServerConfig) {
         context.dataStore.edit { p ->
@@ -73,5 +83,22 @@ class AppSettings(private val context: Context) {
     suspend fun setSlideshow(seconds: Int, shuffle: Boolean) = context.dataStore.edit {
         it[Keys.slideshowSeconds] = seconds.coerceIn(3, 120)
         it[Keys.slideshowShuffle] = shuffle
+    }
+
+    suspend fun setSlideshowSeconds(seconds: Int) = context.dataStore.edit {
+        it[Keys.slideshowSeconds] = seconds.coerceIn(3, 120)
+    }
+
+    suspend fun setDreamSource(id: String, name: String) = context.dataStore.edit {
+        it[Keys.dreamSourceId] = id
+        it[Keys.dreamSourceName] = name
+    }
+
+    suspend fun setDreamSeconds(seconds: Int) = context.dataStore.edit {
+        it[Keys.dreamSeconds] = seconds.coerceIn(5, 300)
+    }
+
+    suspend fun setDreamIncludeVideos(value: Boolean) = context.dataStore.edit {
+        it[Keys.dreamIncludeVideos] = value
     }
 }

@@ -107,3 +107,22 @@ data class AppStatusDto(
     val configured: Boolean,
     val name: String,
 )
+
+@Serializable
+data class SettingsDto(
+    val slideshowSeconds: Int,
+    val dreamSeconds: Int,
+    val dreamIncludeVideos: Boolean,
+    val dreamSourceId: String,
+    val dreamSourceName: String,
+)
+
+/** Partial update: only non-null fields are applied. */
+@Serializable
+data class SettingsUpdateDto(
+    val slideshowSeconds: Int? = null,
+    val dreamSeconds: Int? = null,
+    val dreamIncludeVideos: Boolean? = null,
+    val dreamSourceId: String? = null,
+    val dreamSourceName: String? = null,
+)

@@ -41,18 +41,24 @@ Everything in `tools/` is part of the repo (node deps: `cd tools && npm install`
 
 ---
 
-## Feature status (v0.4.1, 2026-08-22)
+## Feature status (v0.4.5, 2026-08-22)
 
 All items marked ✓ are **verified on the real box against the real Immich server**, usually via the pixel-analysis technique described under Testing.
 
 - ✓ Fullscreen borderless photo viewer, crossfade transitions, blur-fill backdrop for portrait photos
 - ✓ D-pad control: ←/→ flip, ↓ filmstrip, ↑ source menu (Timeline / Favorites / Albums / Remote), OK = info overlay
 - ✓ Video playback with sound (Media3 ExoPlayer), correct pillarbox geometry for portrait videos, OK = play/pause
+- ✓ Unsupported video formats (e.g. 4K60 H.264 High@L5.2, which the box's AVC decoder rejects) show an on-screen message with codec, profile/level and resolution instead of a black screen; slideshow skips past them
 - ✓ Slideshow: auto-advance (10 s default), shuffle; videos advance on completion
 - ✓ Phone remote: QR + PIN pairing, timeline/favorites/albums browsing, smart search, tap-to-display with context (slideshow follows what the phone is browsing), prev/next/play/shuffle/info controls, 2 s state polling
+- ✓ Phone timeline is an **endless scroll** (months load on demand in both directions, scroll-anchored so prepending never jumps) with a right-edge **year/month rail scrubber** (photo-count-proportional thumb, year ticks, drag or tap to jump)
 - ✓ Phone-driven first-run setup: scan QR on setup screen, type URL + API key on the phone, confirm cert fingerprint on the phone, TV saves config
 - ✓ Self-signed cert pinning (SHA-256 of leaf cert, shown for verification, stored in DataStore)
-- ✓ Daydream screensaver registered (`SlideshowDreamService`) — **logic shared with the viewer, but NOT yet exercised on the real box** (emulator images cannot enter Doze; enable it in TV Settings → Screensaver and idle the TV to verify)
+- ✓ Daydream screensaver (`SlideshowDreamService`) — **verified on the real box** (started via BACK on the launcher; pixel-diff confirmed advancing). Note: Google TV hides 3rd-party dreams from the Screensaver picker (only Google Photos / AI art are listed) — set it once via `tools/box.sh dream` (writes the `screensaver_components` secure setting over ADB; survives reboot)
+- ✓ Screensaver source is selectable from the phone (⚙ in the SPA footer): Timeline / Favorites / any album; stored in DataStore, applied next dream start; also cycles through *all* buckets of the source instead of refetching one month forever
+- ✓ Separate slideshow intervals: viewer (3–120 s) and screensaver (5–300 s), both set from the phone's ⚙ sheet
+- ✓ Screensaver crossfades between photos (dual blurred-backdrop + foreground ImageView layers, 900 ms), matching the viewer's crossfade
+- ✓ Screensaver can optionally include videos (plays with sound via ExoPlayer; off by default — excluded videos are skipped, not shown)
 - ✗ People browsing (endpoint exists at `/r/{token}/people`, no UI yet)
 - ✗ TV-side settings UI (slideshow interval/shuffle only changeable from the phone or defaults)
 - ✗ Video seek/scrub from the phone (Range proxy exists; no preview player in the SPA)
@@ -82,7 +88,9 @@ app/src/main/java/dev/myimmich/tv/
   MainActivity.kt            config state machine: Loading → Setup | Viewer
   MyImmichApp.kt             owns AppSettings + RemoteController; starts RemoteServer
                              at app launch (runs unconfigured for phone setup)
-  SlideshowDreamService.kt   Daydream screensaver (shuffled latest months)
+  SlideshowDreamService.kt   Daydream screensaver: source (timeline/favorites/album),
+                              own interval, crossfade (dual ImageView layers),
+                              optional video playback via shared RotatingVideoFrame
   api/ImmichModels.kt        DTOs incl. columnar→row transpose (see API notes)
   api/ImmichClient.kt        REST client (OkHttp + kotlinx.serialization), URL builders
   api/ImmichImageFetcher.kt  Coil Fetcher for ImmichThumb(url) using the authed client
@@ -98,7 +106,7 @@ app/src/main/java/dev/myimmich/tv/
   ui/viewer/VideoPlayer.kt   RotatingVideoFrame: TextureView with manual aspect+rotation
   ui/pairing/PairingScreen.kt QR + PIN overlay (menu → Remote)
   ui/theme/Theme.kt
-app/src/main/assets/web/     the phone SPA: index.html, app.js (~320 lines), style.css
+app/src/main/assets/web/     the phone SPA: index.html, app.js (~650 lines), style.css
 tools/                       dev/test scripts (see Testing)
 ```
 
@@ -118,7 +126,7 @@ Pairing: PIN shown on TV (also in `adb logcat -s ImmichTV:D`), `POST /api/pair {
 
 Phone-driven setup (`/setup/*`, all PIN-gated): `submit {pin,url,apiKey}` → TV probes TLS → `AWAITING_CONFIRM` with fingerprint (phone displays it) → `confirm {pin}` → TV validates key against `/api/users/me`, saves, `DONE` → phone auto-pairs.
 
-Viewer endpoints under `/r/{token}/`: `GET state`, `POST command`, `buckets[?album=|favorite=true]`, `assets?bucket=…[&album=|favorite=true]`, `albums`, `search?q=…`, `people`, `thumb/{id}?size=preview|thumbnail`, `original/{id}` (Range passthrough → 206 + Content-Range).
+Viewer endpoints under `/r/{token}/`: `GET state`, `POST command`, `buckets[?album=|favorite=true]`, `assets?bucket=…[&album=|favorite=true]`, `albums`, `search?q=…`, `people`, `thumb/{id}?size=preview|thumbnail`, `original/{id}` (Range passthrough → 206 + Content-Range), `GET|POST settings`. `GET` returns `{slideshowSeconds, dreamSeconds, dreamIncludeVideos, dreamSourceId, dreamSourceName}`; `POST` takes the same fields, all optional (null = unchanged) — `dreamSourceId`: "" = timeline, "favorites", or an album id.
 
 Commands: `{type: show|next|prev|slideshow|shuffle|info, assetId?, assetType?, value?, context?}` where `context = {source: timeline|favorites|album|search, albumId?, albumName?, bucket?, assets?}` — context is what makes the slideshow follow the phone's view.
 
@@ -208,7 +216,7 @@ echo | openssl s_client -connect immich.rydberg.lan:443 -servername immich.rydbe
 
 ### 2. Phone simulation with headless Chromium
 
-`tools/phone_sim.js` (basic sanity: does the SPA pair, render the grid, load images?) uses system Chromium via puppeteer-core. Run: `cd tools && node phone_sim.js 192.168.50.122 <pin>`. It reports DOM state (cells, broken images, months) and every console/network error — this is how the SPA `grid is not defined` bug was found instantly after curl tests had passed.
+`tools/phone_sim.js` (basic sanity: does the SPA pair, render the grid, load images, endless-scroll-append on scroll?) uses system Chromium via puppeteer-core. Run: `cd tools && node phone_sim.js 192.168.50.122 <pin>`. It reports DOM state (cells, broken images, months) and every console/network error — this is how the SPA `grid is not defined` bug was found instantly after curl tests had passed.
 
 **Lesson learned (cost hours):** when chaining UI tests, reset shared state between them. The phone's ▶ button *toggles* the TV slideshow; a previous test leaving it on makes the next test's "press play" turn it *off*, producing phantom "slideshow doesn't work" results. When in doubt, drive commands directly over the API where you control the state.
 
@@ -256,18 +264,27 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 
 **Slideshow followed the timeline when browsing an album on the phone:** `show` commands now carry the phone's browsing context; the TV switches source (incl. the SEARCH pseudo-source carrying the result list) before jumping.
 
+**Endless-scroll timeline (v0.4.2):** the phone SPA's month chips were replaced by a continuous stream plus a photo-count-proportional rail scrubber. Two things learned: (1) CSS `overflow-anchor` is unreliable inside the long-lived grid appends — prepend does manual anchoring (`scrollTop += scrollHeight delta` after `insertBefore`), which held the anchor pixel-stable across a 8.5k-pixel prepend on the real library; (2) rail jumps to *unloaded* months reset the window (`seq` token invalidates in-flight fetches) rather than trying to splice months into the middle of the DOM — contiguous windows keep `topSegIndex`/thumb math trivial. `tools/analyze_screenshot.py` also gained RGB-PNG support (puppeteer screenshots are RGB, Android screencap is RGBA — the old stride assumption crashed on the former).
+
+**Big wedding video played as black screen + silence (v0.4.3):** a 21-min 4 GB album video refused to play. Red herrings ruled out first: Range proxying at >2 GiB offsets works (206 + correct `Content-Range`), the moov atom is at the end of the file but the tail range fetches fine, and the HTTP client's timeouts are generous. The real cause was in logcat: `DecoderInitializationException` for `avc1.640834` — H.264 High Profile Level 5.2 at 3840×2160@60. The S905X5M's AVC decoder caps out below that profile/level (4K60 is only supported in HEVC/AV1/VP9), and the software decoder can't do 4K60 either — so no Android player path exists for that file, transcoding aside. Fix: `onPlayerError` in `VideoPlayer` maps the exception (via the `DecoderInitializationException` cause and `rendererFormat`) to a friendly message — codec name, profile/level, resolution, frame rate — rendered by `VideoErrorMessage`; slideshow auto-skips a failed video after 4 s instead of hanging on it. Verified with `uiautomator dump`: the TV showed "Video format not supported by this TV / H.264 (AVC) High Profile, Level 5.2 [avc1.640834] / 3840 × 2160 @ 60 fps".
+
+**Screensaver invisible in the picker + album selection (v0.4.4):** the DreamService was correctly registered all along (`dumpsys package` resolved the intent filter) but never appeared in TV Settings → Screensaver — Google TV only lists Google's own dreams there. `settings put secure screensaver_components dev.myimmich.tv/dev.myimmich.tv.SlideshowDreamService` over ADB makes it the active dream (wrapped as `tools/box.sh dream`); BACK on the launcher then starts it. `cmd dreams start-dreaming` needs root (unavailable) and `Somnambulator` doesn't exist on this box — the launcher BACK trick is the manual trigger. While wiring album selection into the dream, found it refetched `buckets.getOrNull(1)` forever once the first month was exhausted (never advanced, never wrapped) — rewritten to cycle all buckets, skipping empty ones. Screensaver source picks: phone SPA ⚙ sheet → `POST /settings` → DataStore → read at dream start (changes apply next dream). Verified: set "Sommar 2025" album → logcat `Dream source: … (Sommar 2025), 1 buckets` → pixel-diff 54% across an interval boundary.
+
+**Separate intervals, dream crossfade + video, and a recurring black-screen (v0.4.5):** the viewer already crossfaded (Compose `Crossfade`), but the dream hard-cut between photos; it now crossfades with two pairs of ImageViews (blurred backdrop + fit foreground) animated 900 ms apart — the same layered trick the viewer uses in Compose. Viewer (3–120 s) and dream (5–300 s) intervals are separate DataStore prefs, both editable from the phone's ⚙ sheet; the settings endpoint became a partial-update POST (only non-null fields applied). Adding optional dream video playback hit **the black-screen-with-audio bug class again**: `PlayerView` (SurfaceView-backed) rendered nothing on the Amlogic box while audio played, even though the same file played fine in the viewer. The viewer works because it renders into the custom `RotatingVideoFrame` (TextureView with manual aspect/rotation). Fix: `RotatingVideoFrame` was made internal/shared and the dream now uses it with a bare `ExoPlayer` (`setVideoTextureView`), sized by `onVideoSizeChanged`. Lesson: **on this box, always render video through TextureView — SurfaceView/PlayerView is black in dream contexts** (likely a secure-layer/surface composition quirk). Also observed: the app process gets frozen by Android's cached-app freezer when long-backgrounded — the Ktor remote server stops answering (curl hangs) until the app returns to the foreground; noted in Known issues. Verified on the box: 5 s viewer interval advancing (46% pixel diff), dream playing a 13-min christening video fullscreen (63% diff), crossfade observed live, settings round-trip + reinstall persistence.
+
 ---
 
 ## Known issues & TODO (prioritized)
 
 1. **Sessions die on app restart** — PIN rotates, tokens are memory-only. Every app reinstall/restart forces re-pairing. Fix direction: persist tokens in DataStore (accept the PIN rotation, keep tokens), or persist PIN + tokens.
-2. **Screensaver unverified on the box** — enable in TV settings and idle-test; logic mirrors the working viewer path.
-3. **People browsing** — endpoint ready, SPA tab missing.
-4. **Shuffle** has no TV-remote key binding (phone-only). Media FF/REW were the planned keys.
-5. **TV settings UI** — interval/shuffle are settings-flow only.
-6. **Video scrubbing from phone** — Range proxy works; SPA has no `<video>` preview.
-7. `livePhotoVideoId` is carried in models but unused.
-8. Slideshow interval is global, not per-run.
+2. **People browsing** — endpoint ready, SPA tab missing.
+3. **Shuffle** has no TV-remote key binding (phone-only). Media FF/REW were the planned keys.
+4. **TV settings UI** — intervals/shuffle/screensaver options are phone-only (⚙ in the SPA).
+5. **Video scrubbing from phone** — Range proxy works; SPA has no `<video>` preview.
+6. `livePhotoVideoId` is carried in models but unused.
+7. Slideshow interval is global, not per-run.
+8. Screensaver settings (source/interval/videos) apply at next dream start (no live "restart dream" from the phone).
+9. **Remote server freezes when the app is backgrounded** — Android's cached-app freezer suspends the process (no HTTP response) until the app is brought to the foreground again. Workaround: keep the app in the foreground/overview; proper fix is a foreground service.
 
 ---
 
@@ -284,13 +301,13 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 
 **TV remote:** ←/→ prev/next · ↓ filmstrip · ↑ source menu · OK info (photos) / play-pause (videos) · ▶/⏸ media keys slideshow on/off · BACK closes overlays.
 
-**Phone:** tabs (Timeline / Favorites / Albums / Search with debounced smart search), month chips, thumbnail grid (tap = display on TV, context included), bottom bar ⏮ ▶ ⏭ 🔀 ℹ.
+**Phone:** tabs (Timeline / Favorites / Albums / Search with debounced smart search), endless photo stream (scroll up/down through history; months load on demand), year/month rail on the right edge (drag or tap to jump, thumb size = loaded share of library, year ticks), thumbnail grid (tap = display on TV, context included), bottom bar ⏮ ▶ ⏭ 🔀 ℹ ⚙ (⚙ = slideshow intervals, screensaver source/videos).
 
 ---
 
 ## Repository layout & tooling
 
-- `tools/box.sh` — box deploy/PIN/pair/state/cmd/screenshot/log helpers (`BOX_SERIAL`, `TV_HOST` env overrides)
+- `tools/box.sh` — box deploy/PIN/pair/state/cmd/screenshot/log/dream helpers (`BOX_SERIAL`, `TV_HOST` env overrides)
 - `tools/phone_sim.js` — headless-Chromium phone simulation (pair via hash pin, report grid/console/network)
 - `tools/analyze_screenshot.py` — screencap ASCII art / content extent / frame diff
 - `tools/package.json` — puppeteer-core 25.8.0 pinned; `cd tools && npm install`
