@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>My Immich TV Remote</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="pair" class="pair hidden">
+  <h1>My Immich TV</h1>
+  <p class="muted">Enter the PIN shown on your TV</p>
+  <form id="pairForm">
+    <input id="pinInput" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="000000">
+    <button type="submit">Pair</button>
+  </form>
+  <p id="pairError" class="error"></p>
+</div>
+<div id="app" class="app hidden">
+  <header>
+    <div class="brand">My Immich TV</div>
+    <div class="now" id="nowPlaying"></div>
+    <div class="conn" id="connState"><span class="dot"></span> TV</div>
+  </header>
+  <nav id="tabs">
+    <button data-tab="timeline" class="active">Timeline</button>
+    <button data-tab="favorites">Favorites</button>
+    <button data-tab="albums">Albums</button>
+    <button data-tab="search">Search</button>
+  </nav>
+  <div id="months" class="months"></div>
+  <main id="content"></main>
+  <footer>
+    <button id="btnPrev" title="Previous">⏮</button>
+    <button id="btnPlay" title="Slideshow">▶</button>
+    <button id="btnNext" title="Next">⏭</button>
+    <button id="btnShuffle" title="Shuffle">🔀</button>
+    <button id="btnInfo" title="Info">ℹ</button>
+  </footer>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
