@@ -16,11 +16,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.ExoPlaybackException
+import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer.DecoderInitializationException
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import java.util.Locale
 
 private class RotatingVideoFrame(context: Context) : FrameLayout(context) {
 
@@ -92,9 +96,11 @@ fun VideoPlayer(
     modifier: Modifier = Modifier,
     toggleTick: Int = 0,
     onEnded: () -> Unit = {},
+    onError: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val currentOnEnded by rememberUpdatedState(onEnded)
+    val currentOnError by rememberUpdatedState(onError)
 
     val frame = remember { RotatingVideoFrame(context) }
 
@@ -136,6 +142,10 @@ fun VideoPlayer(
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 frame.update(videoSize)
             }
+
+            override fun onPlayerError(error: PlaybackException) {
+                currentOnError(describePlaybackError(error))
+            }
         }
         player.addListener(listener)
         onDispose {
@@ -148,4 +158,69 @@ fun VideoPlayer(
         factory = { frame },
         modifier = modifier,
     )
+}
+
+private fun describePlaybackError(error: PlaybackException): String {
+    val chain = generateSequence<Throwable>(error) { it.cause }
+    val decoderInit =
+        chain.filterIsInstance<DecoderInitializationException>().firstOrNull()
+    val format = (error as? ExoPlaybackException)?.rendererFormat
+    if (decoderInit != null) {
+        val mime = format?.sampleMimeType ?: decoderInit.mimeType
+        val title = if (mime?.startsWith("audio") == true) {
+            "Audio track cannot be decoded by this TV"
+        } else {
+            "Video format not supported by this TV"
+        }
+        val dims = buildString {
+            if (format != null && format.width > 0 && format.height > 0) {
+                append("${format.width} × ${format.height}")
+                if (format.frameRate > 0f) {
+                    append(" @ ").append(formatFps(format.frameRate)).append(" fps")
+                }
+            }
+        }
+        return listOfNotNull(title, friendlyCodec(format?.codecs ?: mime), dims.ifBlank { null })
+            .joinToString("\n")
+    }
+    val reason = chain.lastOrNull()?.message ?: error.errorCodeName
+    return "Playback failed\n$reason"
+}
+
+private fun formatFps(fps: Float): String =
+    if (fps == fps.toInt().toFloat()) "${fps.toInt()}" else String.format(Locale.US, "%.1f", fps)
+
+private fun friendlyCodec(codecs: String?): String {
+    if (codecs.isNullOrBlank()) return "Unknown codec"
+    val parts = codecs.split(".")
+    val base = parts.first()
+    val name = when (base) {
+        "avc1", "avc3" -> "H.264 (AVC)"
+        "hev1", "hvc1" -> "H.265 (HEVC)"
+        "av01" -> "AV1"
+        "vp09", "vp9" -> "VP9"
+        "vp08", "vp8" -> "VP8"
+        "mp4a" -> "AAC"
+        else -> base
+    }
+    var detail = ""
+    if ((base == "avc1" || base == "avc3") && parts.size > 1) {
+        val pli = parts[1]
+        if (pli.length == 6 && pli.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+            val profile = pli.substring(0, 2).toInt(16)
+            val level = pli.substring(4, 6).toInt(16)
+            val profileName = when (profile) {
+                0x42 -> "Baseline"
+                0x4D -> "Main"
+                0x58 -> "Extended"
+                0x64 -> "High"
+                0x6E -> "High 10"
+                0x7A -> "High 4:2:2"
+                0xF4 -> "High 4:4:4"
+                else -> null
+            }
+            if (profileName != null) detail = " $profileName Profile, Level ${level / 10}.${level % 10}"
+        }
+    }
+    return name + detail + " [$codecs]"
 }

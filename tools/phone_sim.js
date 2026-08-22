@@ -31,14 +31,26 @@ if (!host || !pin) {
   await new Promise((r) => setTimeout(r, 6000));
   await page.screenshot({ path: 'phone_sim.png' });
 
-  const st = await page.evaluate(() => {
+  const st = await page.evaluate(async () => {
     const imgs = [...document.querySelectorAll('.cell img')];
+    const main = document.getElementById('content');
+    const bubble = () => (document.querySelector('.rail-bubble') || {}).textContent || '';
+    const cells = document.querySelectorAll('.cell').length;
+    const segments = document.querySelectorAll('#content .grid').length;
+    const before = bubble();
+    main.scrollTop = main.scrollHeight;           // endless scroll: trigger appends
+    await new Promise((r) => setTimeout(r, 2500));
     return {
       appVisible: !document.getElementById('app').classList.contains('hidden'),
       setupVisible: !document.getElementById('setup').classList.contains('hidden'),
       pairVisible: !document.getElementById('pair').classList.contains('hidden'),
-      months: document.querySelectorAll('#months button').length,
-      cells: document.querySelectorAll('.cell').length,
+      railVisible: !document.getElementById('rail').classList.contains('hidden'),
+      segments: segments,
+      segmentsAfterScroll: document.querySelectorAll('#content .grid').length,
+      cells: cells,
+      cellsAfterScroll: document.querySelectorAll('.cell').length,
+      bubbleBefore: before,
+      bubbleAfterScroll: bubble(),
       brokenInView: imgs.filter((i) => i.complete && i.naturalWidth === 0).length,
       token: (localStorage.getItem('tv_token') || '').slice(0, 8),
       contentText: document.getElementById('content').textContent.trim().slice(0, 80),

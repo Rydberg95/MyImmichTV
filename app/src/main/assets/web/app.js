@@ -1,27 +1,46 @@
 (() => {
   const $ = (sel) => document.querySelector(sel);
+  const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+    'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
   const state = {
     token: localStorage.getItem('tv_token') || null,
     tab: 'timeline',
-    month: null,
     albumId: null,
     albumName: null,
-    months: [],
     assets: [],
     tv: null,
   };
 
-  function buildContext() {
-    if (state.tab === 'search') {
-      return { source: 'search', assets: state.assets };
-    }
+  const mainEl = $('#content');
+  const railEl = $('#rail');
+  const thumbEl = railEl.querySelector('.rail-thumb');
+  const bubbleEl = railEl.querySelector('.rail-bubble');
+  const ticksEl = railEl.querySelector('.rail-ticks');
+
+  // ---- endless-scroll stream state ----
+  // months: newest-first [{timeBucket, count}]; cum[i] = photos in months[0..i-1]
+  // win: contiguous window of loaded months [start, end); segs mirror the DOM order
+  const stream = {
+    months: [],
+    cum: [0],
+    total: 0,
+    segs: [],
+    win: { start: 0, end: 0 },
+    seq: 0,
+    appendBusy: false,
+    prependBusy: false,
+    moreEl: null,
+  };
+
+  function buildContext(bucket) {
     if (state.tab === 'favorites') {
-      return { source: 'favorites', bucket: state.month };
+      return { source: 'favorites', bucket: bucket };
     }
     if (state.tab === 'albums' && state.albumId) {
-      return { source: 'album', albumId: state.albumId, albumName: state.albumName, bucket: state.month };
+      return { source: 'album', albumId: state.albumId, albumName: state.albumName, bucket: bucket };
     }
-    return { source: 'timeline', bucket: state.month };
+    return { source: 'timeline', bucket: bucket };
   }
 
   function api(path, opts) {
@@ -54,7 +73,7 @@
   function showApp() {
     $('#pair').classList.add('hidden');
     $('#app').classList.remove('hidden');
-    loadMonths();
+    loadStream();
     pollState();
   }
 
@@ -81,101 +100,202 @@
     catch (err) { $('#pairError').textContent = 'Wrong PIN'; }
   });
 
-  function renderMonths() {
-    const el = $('#months');
-    el.innerHTML = '';
-    const list = state.tab === 'albums' ? [] : state.months;
-    el.style.display = state.tab === 'albums' || state.tab === 'search' ? 'none' : 'flex';
-    list.forEach((m) => {
-      const b = document.createElement('button');
-      b.textContent = m.timeBucket;
-      if (m.timeBucket === state.month) b.classList.add('active');
-      b.addEventListener('click', () => {
-        state.month = m.timeBucket;
-        renderMonths();
-        loadAssets();
-      });
-      el.appendChild(b);
-    });
+  // ---- stream: loading ----
+
+  function monthLabel(bucket) {
+    const m = +bucket.slice(5, 7);
+    return (MONTHS[m - 1] || '?') + ' ' + bucket.slice(0, 4);
+  }
+  function sourceParams() {
+    if (state.tab === 'favorites') return '&favorite=true';
+    if (state.tab === 'albums' && state.albumId) return '&album=' + encodeURIComponent(state.albumId);
+    return '';
   }
 
-  async function loadMonths() {
+  function clearStream() {
+    stream.seq++;
+    stream.months = [];
+    stream.cum = [0];
+    stream.total = 0;
+    stream.segs = [];
+    stream.win = { start: 0, end: 0 };
+    stream.appendBusy = false;
+    stream.prependBusy = false;
+    stream.moreEl = null;
+    mainEl.innerHTML = '';
+    railEl.classList.add('hidden');
+    ticksEl.innerHTML = '';
+    bubbleEl.textContent = '';
+  }
+
+  async function loadStream() {
+    clearStream();
+    const seq = stream.seq;
+    let q = '';
+    if (state.tab === 'favorites') q = '?favorite=true';
+    else if (state.tab === 'albums' && state.albumId) q = '?album=' + encodeURIComponent(state.albumId);
     try {
-      let q = '';
-      if (state.tab === 'favorites') q = '?favorite=true';
-      else if (state.tab === 'albums' && state.albumId) q = '?album=' + state.albumId;
-      state.months = await api('/buckets' + q);
-      if (!state.months.length) { state.month = null; renderMonths(); renderAssets([]); return; }
-      if (!state.month || !state.months.some(m => m.timeBucket === state.month)) {
-        state.month = state.months[0].timeBucket;
+      const buckets = (await api('/buckets' + q))
+        .filter((m) => m.count > 0)
+        .sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
+      if (seq !== stream.seq) return;
+      stream.months = buckets;
+      stream.cum = [0];
+      buckets.forEach((m) => stream.cum.push(stream.cum[stream.cum.length - 1] + m.count));
+      stream.total = stream.cum[stream.cum.length - 1];
+      if (!buckets.length) {
+        mainEl.innerHTML = '<div class="empty">No photos here</div>';
+        return;
       }
-      renderMonths();
-      loadAssets();
+      stream.moreEl = document.createElement('div');
+      stream.moreEl.className = 'stream-more';
+      stream.moreEl.textContent = 'Loading more…';
+      mainEl.appendChild(stream.moreEl);
+      buildRailTicks();
+      railEl.classList.remove('hidden');
+      updateRail();
+      await appendMonth();
     } catch (e) { console.error(e); }
   }
 
-  async function loadAssets() {
-    if (!state.month) return;
-    let q = '?bucket=' + encodeURIComponent(state.month);
-    if (state.tab === 'favorites') q += '&favorite=true';
-    if (state.tab === 'albums' && state.albumId) q += '&album=' + state.albumId;
-    try {
-      state.assets = await api('/assets' + q);
-      renderAssets(state.assets);
-    } catch (e) { console.error(e); }
+  function fetchMonth(i) {
+    return api('/assets?bucket=' + encodeURIComponent(stream.months[i].timeBucket) + sourceParams());
   }
+
+  async function appendMonth() {
+    if (stream.appendBusy || !stream.moreEl) return;
+    if (stream.win.end >= stream.months.length) { stream.moreEl.classList.remove('show'); return; }
+    stream.appendBusy = true;
+    const seq = stream.seq;
+    const i = stream.win.end;
+    let chained = false;
+    stream.moreEl.classList.add('show');
+    try {
+      const assets = await fetchMonth(i);
+      if (seq !== stream.seq || stream.win.end !== i) return;
+      const el = buildSegEl(i, assets);
+      mainEl.insertBefore(el, stream.moreEl);
+      stream.win.end = i + 1;
+      stream.segs.push({ i: i, el: el });
+      if (stream.win.end >= stream.months.length) stream.moreEl.classList.remove('show');
+      updateRail();
+      chained = true;
+    } catch (e) {
+      console.error(e);
+    } finally {
+      stream.appendBusy = false;
+    }
+    if (chained) maybeLoadMore();
+  }
+
+  async function prependMonth() {
+    if (stream.prependBusy || stream.win.start <= 0) return;
+    stream.prependBusy = true;
+    const seq = stream.seq;
+    const i = stream.win.start - 1;
+    let chained = false;
+    try {
+      const assets = await fetchMonth(i);
+      if (seq !== stream.seq || stream.win.start !== i + 1) return;
+      const el = buildSegEl(i, assets);
+      const before = mainEl.scrollHeight;
+      mainEl.insertBefore(el, mainEl.firstChild);
+      mainEl.scrollTop += mainEl.scrollHeight - before;
+      stream.win.start = i;
+      stream.segs.unshift({ i: i, el: el });
+      updateRail();
+      chained = mainEl.scrollTop < 300 && stream.win.start > 0;
+    } catch (e) {
+      console.error(e);
+    } finally {
+      stream.prependBusy = false;
+    }
+    if (chained) prependMonth();
+  }
+
+  function maybeLoadMore() {
+    if (!stream.months.length || railEl.classList.contains('hidden')) return;
+    if (mainEl.scrollHeight - mainEl.scrollTop - mainEl.clientHeight < 600) appendMonth();
+    if (mainEl.scrollTop < 300 && stream.win.start > 0) prependMonth();
+  }
+
+  async function jumpTo(i) {
+    if (i < 0 || i >= stream.months.length) return;
+    const seg = stream.segs.find((s) => s.i === i);
+    if (seg) {
+      mainEl.scrollTop =
+        seg.el.getBoundingClientRect().top - mainEl.getBoundingClientRect().top + mainEl.scrollTop;
+      return;
+    }
+    // target month not loaded: reset the window to start there
+    stream.seq++;
+    const seq = stream.seq;
+    Array.prototype.forEach.call(mainEl.querySelectorAll('.grid'), (g) => g.remove());
+    stream.segs = [];
+    stream.win = { start: i, end: i };
+    mainEl.scrollTop = 0;
+    await appendMonth();
+    if (seq !== stream.seq) return;
+    maybeLoadMore();
+  }
+
+  // ---- stream: rendering ----
 
   function imgSrc(id, size) {
     return `/r/${state.token}/thumb/${id}?size=${size || 'thumbnail'}`;
   }
 
-  function renderAssets(assets) {
-    const main = $('#content');
-    main.innerHTML = '';
-    if (state.tab === 'search') { renderSearch(); return; }
-    if (state.tab === 'albums' && !state.albumId) { renderAlbums(); return; }
-    fillGrid(assets);
+  function makeCell(a, ctx) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.dataset.id = a.id;
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.src = imgSrc(a.id);
+    img.alt = '';
+    cell.appendChild(img);
+    if (a.type === 'VIDEO') {
+      const v = document.createElement('span');
+      v.className = 'vid';
+      v.textContent = '▶';
+      cell.appendChild(v);
+    }
+    cell.addEventListener('click', () => {
+      command('show', { assetId: a.id, assetType: a.type, context: ctx });
+    });
+    return cell;
+  }
+
+  function buildSegEl(i, assets) {
+    const ctx = buildContext(stream.months[i].timeBucket);
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    grid.dataset.bucket = stream.months[i].timeBucket;
+    assets.forEach((a) => grid.appendChild(makeCell(a, ctx)));
+    return grid;
   }
 
   function fillGrid(assets) {
-    const main = $('#content');
     if (!assets.length) {
-      if (!document.querySelector('.grid')) main.innerHTML = '<div class="empty">No photos here</div>';
+      if (!document.querySelector('.grid')) mainEl.innerHTML = '<div class="empty">No photos here</div>';
       return;
     }
     const old = document.querySelector('.grid');
     if (old) old.remove();
+    const ctx = { source: 'search', assets: assets };
     const grid = document.createElement('div');
     grid.className = 'grid';
-    assets.forEach((a) => {
-      const cell = document.createElement('div');
-      cell.className = 'cell' + (state.tv && state.tv.assetId === a.id ? ' current' : '');
-      const img = document.createElement('img');
-      img.loading = 'lazy';
-      img.src = imgSrc(a.id);
-      img.alt = '';
-      cell.appendChild(img);
-      if (a.type === 'VIDEO') {
-        const v = document.createElement('span');
-        v.className = 'vid';
-        v.textContent = '▶';
-        cell.appendChild(v);
-      }
-      cell.addEventListener('click', () => {
-        command('show', { assetId: a.id, assetType: a.type, context: buildContext() });
-      });
-      grid.appendChild(cell);
-    });
-    main.appendChild(grid);
+    assets.forEach((a) => grid.appendChild(makeCell(a, ctx)));
+    mainEl.appendChild(grid);
   }
 
   async function renderAlbums() {
-    const main = $('#content');
+    clearStream();
     try {
       const albums = await api('/albums');
-      main.innerHTML = '';
+      mainEl.innerHTML = '';
       if (!albums.length) {
-        main.innerHTML = '<div class="empty">No albums</div>';
+        mainEl.innerHTML = '<div class="empty">No albums</div>';
         return;
       }
       const wrap = document.createElement('div');
@@ -192,19 +312,16 @@
         d.addEventListener('click', () => {
           state.albumId = al.id;
           state.albumName = al.name;
-          state.month = null;
-          $('#months').style.display = 'flex';
-          loadMonths();
+          loadStream();
         });
         wrap.appendChild(d);
       });
-      main.appendChild(wrap);
+      mainEl.appendChild(wrap);
     } catch (e) { console.error(e); }
   }
 
   function renderSearch() {
-    const main = $('#content');
-    main.innerHTML = '';
+    clearStream();
     const bar = document.createElement('div');
     bar.className = 'searchbar';
     const input = document.createElement('input');
@@ -224,27 +341,130 @@
       }, 350);
     });
     bar.appendChild(input);
-    main.appendChild(bar);
+    mainEl.appendChild(bar);
     const grid = document.createElement('div');
     grid.className = 'grid';
-    main.appendChild(grid);
+    mainEl.appendChild(grid);
   }
+
+  // ---- rail (year/month scrubber) ----
+
+  function topSegIndex() {
+    const probe = mainEl.getBoundingClientRect().top + 40;
+    for (let k = 0; k < stream.segs.length; k++) {
+      if (stream.segs[k].el.getBoundingClientRect().bottom > probe) return stream.segs[k].i;
+    }
+    return stream.segs.length ? stream.segs[stream.segs.length - 1].i : stream.win.start;
+  }
+
+  function updateRail() {
+    if (railEl.classList.contains('hidden') || !stream.months.length) return;
+    const railH = railEl.clientHeight;
+    if (!railH) return;
+    const inset = 6;
+    const usable = Math.max(1, railH - inset * 2);
+    const loaded = stream.cum[stream.win.end] - stream.cum[stream.win.start];
+    const thumbH = Math.max(28, Math.min(usable, Math.round(usable * loaded / stream.total)));
+    const cur = topSegIndex();
+    const pos = stream.cum[cur] / stream.total;
+    thumbEl.style.height = thumbH + 'px';
+    thumbEl.style.top = (inset + Math.min(Math.round(pos * usable), usable - thumbH)) + 'px';
+    if (!drag.active) bubbleEl.textContent = monthLabel(stream.months[cur].timeBucket);
+  }
+
+  function buildRailTicks() {
+    ticksEl.innerHTML = '';
+    for (let i = 1; i < stream.months.length; i++) {
+      const y = stream.months[i].timeBucket.slice(0, 4);
+      if (y !== stream.months[i - 1].timeBucket.slice(0, 4)) {
+        const t = document.createElement('span');
+        t.className = 'rail-tick';
+        t.textContent = y;
+        t.style.top = (stream.cum[i] / stream.total * 100) + '%';
+        ticksEl.appendChild(t);
+      }
+    }
+  }
+
+  function railIndexAt(clientY) {
+    const r = railEl.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientY - r.top) / r.height));
+    const target = ratio * stream.total;
+    let i = 0;
+    while (i + 1 < stream.cum.length && stream.cum[i + 1] <= target) i++;
+    return i;
+  }
+
+  const drag = { active: false, target: null, timer: null };
+
+  function onRailPoint(clientY, final) {
+    if (!stream.months.length) return;
+    const i = railIndexAt(clientY);
+    drag.target = i;
+    bubbleEl.textContent = monthLabel(stream.months[i].timeBucket);
+    const seg = stream.segs.find((s) => s.i === i);
+    if (seg) {
+      clearTimeout(drag.timer); drag.timer = null;
+      mainEl.scrollTop =
+        seg.el.getBoundingClientRect().top - mainEl.getBoundingClientRect().top + mainEl.scrollTop;
+    } else if (final) {
+      clearTimeout(drag.timer); drag.timer = null;
+      jumpTo(i);
+    } else {
+      clearTimeout(drag.timer);
+      drag.timer = setTimeout(() => {
+        if (drag.active && drag.target === i) jumpTo(i);
+      }, 250);
+    }
+  }
+
+  railEl.addEventListener('pointerdown', (e) => {
+    if (railEl.classList.contains('hidden')) return;
+    e.preventDefault();
+    drag.active = true;
+    railEl.classList.add('drag');
+    railEl.setPointerCapture(e.pointerId);
+    onRailPoint(e.clientY, false);
+  });
+  railEl.addEventListener('pointermove', (e) => {
+    if (drag.active) onRailPoint(e.clientY, false);
+  });
+  function endDrag() {
+    if (!drag.active) return;
+    drag.active = false;
+    railEl.classList.remove('drag');
+    const t = drag.target;
+    drag.target = null;
+    clearTimeout(drag.timer);
+    drag.timer = null;
+    if (t !== null && t !== topSegIndex()) jumpTo(t);
+  }
+  railEl.addEventListener('pointerup', endDrag);
+  railEl.addEventListener('pointercancel', endDrag);
+
+  let railRaf = 0;
+  mainEl.addEventListener('scroll', () => {
+    if (!railRaf) railRaf = requestAnimationFrame(() => { railRaf = 0; updateRail(); });
+    maybeLoadMore();
+  });
+  window.addEventListener('resize', updateRail);
+
+  // ---- tabs ----
 
   document.querySelectorAll('nav button').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.tab = btn.dataset.tab;
       state.albumId = null;
       state.albumName = null;
-      state.month = null;
-      document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+      state.assets = [];
+      document.querySelectorAll('nav button').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       if (state.tab === 'search') {
-        $('#months').style.display = 'none';
-        renderAssets([]);
+        renderSearch();
       } else if (state.tab === 'albums') {
-        renderAssets([]);
+        renderAlbums();
       } else {
-        loadMonths();
+        loadStream();
       }
     });
   });
@@ -268,11 +488,10 @@
   function syncControls() {
     $('#btnPlay').classList.toggle('on', !!(state.tv && state.tv.slideshow));
     $('#btnShuffle').classList.toggle('on', !!(state.tv && state.tv.shuffle));
-    const cells = document.querySelectorAll('.cell');
-    cells.forEach((c) => c.classList.remove('current'));
+    document.querySelectorAll('.cell.current').forEach((c) => c.classList.remove('current'));
     if (state.tv && state.tv.assetId) {
-      const idx = state.assets.findIndex(a => a.id === state.tv.assetId);
-      if (idx >= 0 && cells[idx]) cells[idx].classList.add('current');
+      const el = mainEl.querySelector('.cell[data-id="' + state.tv.assetId + '"]');
+      if (el) el.classList.add('current');
     }
     const now = $('#nowPlaying');
     if (state.tv && state.tv.assetId) {

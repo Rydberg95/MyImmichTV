@@ -48,8 +48,14 @@
     <button data-tab="albums">Albums</button>
     <button data-tab="search">Search</button>
   </nav>
-  <div id="months" class="months"></div>
-  <main id="content"></main>
+  <div id="mainwrap">
+    <main id="content"></main>
+    <div id="rail" class="rail hidden">
+      <div class="rail-ticks"></div>
+      <div class="rail-track"></div>
+      <div class="rail-thumb"><span class="rail-bubble"></span></div>
+    </div>
+  </div>
   <footer>
     <button id="btnPrev" title="Previous">⏮</button>
     <button id="btnPlay" title="Slideshow">▶</button>

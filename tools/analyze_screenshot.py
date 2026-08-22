@@ -21,20 +21,23 @@ def load(path):
         raise SystemExit(f"{path}: not a PNG")
     pos = 8
     w = h = None
+    bpp = 4
     idat = b""
     while pos < len(data):
         ln = struct.unpack(">I", data[pos:pos + 4])[0]
         ct = data[pos + 4:pos + 8]
         if ct == b"IHDR":
             w, h = struct.unpack(">II", data[pos + 8:pos + 16])
+            color_type = data[pos + 17]         # IHDR: 4 len + 4 type + 4 w + 4 h + 1 depth
+            bpp = 3 if color_type == 2 else 4   # RGB (browser PNGs) vs RGBA (screencap)
         elif ct == b"IDAT":
             idat += data[pos + 8:pos + 8 + ln]
         pos += 12 + ln
     raw = zlib.decompress(idat)
-    stride = w * 4 + 1
+    stride = w * bpp + 1
 
     def px(x, y):
-        i = y * stride + 1 + x * 4
+        i = y * stride + 1 + x * bpp
         return raw[i], raw[i + 1], raw[i + 2]
 
     return w, h, px

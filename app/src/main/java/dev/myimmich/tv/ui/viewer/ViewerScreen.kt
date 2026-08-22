@@ -47,6 +47,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil3.ImageLoader
@@ -137,6 +138,7 @@ fun ViewerScreen(
     var albums by remember { mutableStateOf<List<AlbumDto>>(emptyList()) }
     var slideshowOn by remember { mutableStateOf(false) }
     var videoToggleTick by remember { mutableIntStateOf(0) }
+    var videoError by remember { mutableStateOf<String?>(null) }
 
     suspend fun loadMonth(bucket: String) {
         if (assetsByMonth.containsKey(bucket)) return
@@ -246,6 +248,8 @@ fun ViewerScreen(
     }
     val currentAsset: AssetDto? = remoteAsset ?: assets.getOrNull(index.coerceIn(0, (assets.size - 1).coerceAtLeast(0)))
 
+    LaunchedEffect(currentAsset?.id) { videoError = null }
+
     fun moveManual(delta: Int) {
         if (assets.isEmpty()) return
         slideshowOn = false
@@ -272,6 +276,7 @@ fun ViewerScreen(
                 "show" -> {
                     val id = cmd.assetId
                     if (id != null) {
+                        videoError = null
                         val ctx = cmd.context
                         fun jumpWithin(bucket: String?) {
                             val pos = liveAssets().indexOfFirst { it.id == id }
@@ -478,13 +483,27 @@ fun ViewerScreen(
                 val safeIndex = if (assets.isEmpty()) 0 else index.coerceIn(0, assets.size - 1)
                 val current = currentAsset ?: assets[safeIndex]
                 if (current.isVideo) {
-                    VideoPlayer(
-                        url = client.originalUrl(current.id),
-                        httpClient = authedHttpClient,
-                        modifier = Modifier.fillMaxSize(),
-                        toggleTick = videoToggleTick,
-                        onEnded = { if (slideshowOn) advanceSlideshow() },
-                    )
+                    val errorMessage = videoError
+                    if (errorMessage != null) {
+                        VideoErrorMessage(errorMessage)
+                    } else {
+                        VideoPlayer(
+                            url = client.originalUrl(current.id),
+                            httpClient = authedHttpClient,
+                            modifier = Modifier.fillMaxSize(),
+                            toggleTick = videoToggleTick,
+                            onEnded = { if (slideshowOn) advanceSlideshow() },
+                            onError = { message ->
+                                videoError = message
+                                if (slideshowOn) {
+                                    scope.launch {
+                                        delay(4000)
+                                        if (videoError == message) advanceSlideshow()
+                                    }
+                                }
+                            },
+                        )
+                    }
                 } else {
                     FullscreenAsset(current, client, imageLoader, infoShown)
                 }
@@ -602,6 +621,33 @@ private fun CenteredMessage(text: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(text, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+@Composable
+private fun VideoErrorMessage(message: String) {
+    val lines = message.split('\n')
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            lines.first(),
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+        )
+        lines.drop(1).forEach { line ->
+            Text(
+                line,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF8AA0AB),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        }
     }
 }
 
