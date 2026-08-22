@@ -307,6 +307,7 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 
 ## Repository layout & tooling
 
+- Remote: `https://gitea.rydberg.lan/elias/MyImmichTV.git` (self-hosted Gitea) — `origin`, branch `master`; push when publishing work, keep the feature-status version above in sync with `app/build.gradle.kts`
 - `tools/box.sh` — box deploy/PIN/pair/state/cmd/screenshot/log/dream helpers (`BOX_SERIAL`, `TV_HOST` env overrides)
 - `tools/phone_sim.js` — headless-Chromium phone simulation (pair via hash pin, report grid/console/network)
 - `tools/analyze_screenshot.py` — screencap ASCII art / content extent / frame diff

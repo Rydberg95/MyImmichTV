@@ -22,4 +22,11 @@ My Immich TV is a borderless, fullscreen-first Android TV app (Kotlin) for brows
 - Drive the TV: `tools/box.sh cmd`, `tools/box.sh state`, `tools/box.sh shot`
 - Everything in `tools/` is part of the repo (node deps: `cd tools && npm install` once)
 
+## Remote & versioning
+
+- Remote: `https://gitea.rydberg.lan/elias/MyImmichTV.git` (self-hosted Gitea, `origin`, branch `master`)
+- Bump `versionCode`/`versionName` in `app/build.gradle.kts` for every user-visible change; the README's feature-status header carries the same version
+- Commit style: milestone-sized commits with full verification notes in the message (see `git log`)
+- **Push after committing** when the user asks you to save/publish work — don't leave commits only locally. Include uncommitted-but-finished older work as its own commit rather than mixing it into unrelated new work
+
 When instructions here conflict with `README.md`, `README.md` wins.
