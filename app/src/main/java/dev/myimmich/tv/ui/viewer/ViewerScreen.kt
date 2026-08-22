@@ -161,7 +161,9 @@ fun ViewerScreen(config: ServerConfig, settings: AppSettings, remote: RemoteCont
         }
     }
 
-    LaunchedEffect(source) {
+    var retryTick by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(source, retryTick) {
         error = null
         try {
             val buckets = when (source.kind) {
@@ -173,6 +175,13 @@ fun ViewerScreen(config: ServerConfig, settings: AppSettings, remote: RemoteCont
             if (months.isNotEmpty()) loadMonth(months.first())
         } catch (e: Exception) {
             error = e.message ?: e.javaClass.simpleName
+        }
+    }
+
+    LaunchedEffect(error) {
+        if (error != null) {
+            delay(8000)
+            retryTick++
         }
     }
 
