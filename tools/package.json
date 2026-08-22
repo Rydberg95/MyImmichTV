@@ -1,0 +1,8 @@
+{
+  "name": "my-immich-tv-dev-tools",
+  "private": true,
+  "description": "Headless-Chromium phone simulator for testing the TV remote web UI",
+  "dependencies": {
+    "puppeteer-core": "25.8.0"
+  }
+}

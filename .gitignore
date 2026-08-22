@@ -7,3 +7,5 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+tools/node_modules/
+tools/phone_sim.png
