@@ -210,11 +210,13 @@ fun ViewerScreen(
     fun moveManual(delta: Int) {
         if (assets.isEmpty()) return
         slideshowOn = false
+        remoteAsset = null
         index = (index + delta).coerceIn(0, assets.size - 1)
     }
 
     fun advanceSlideshow() {
         if (assets.isEmpty()) return
+        remoteAsset = null
         index = if (shufflePref && assets.size > 1) {
             var next = index
             while (next == index) next = Random.nextInt(assets.size)
@@ -390,7 +392,7 @@ fun ViewerScreen(
             )
             else -> {
                 val safeIndex = index.coerceIn(0, assets.size - 1)
-                val current = assets[safeIndex]
+                val current = currentAsset ?: assets[safeIndex]
                 if (current.isVideo) {
                     VideoPlayer(
                         url = client.originalUrl(current.id),
