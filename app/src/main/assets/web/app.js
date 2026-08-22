@@ -5,10 +5,24 @@
     tab: 'timeline',
     month: null,
     albumId: null,
+    albumName: null,
     months: [],
     assets: [],
     tv: null,
   };
+
+  function buildContext() {
+    if (state.tab === 'search') {
+      return { source: 'search', assets: state.assets };
+    }
+    if (state.tab === 'favorites') {
+      return { source: 'favorites', bucket: state.month };
+    }
+    if (state.tab === 'albums' && state.albumId) {
+      return { source: 'album', albumId: state.albumId, albumName: state.albumName, bucket: state.month };
+    }
+    return { source: 'timeline', bucket: state.month };
+  }
 
   function api(path, opts) {
     const base = state.token ? `/r/${state.token}` : '';
@@ -148,7 +162,7 @@
         cell.appendChild(v);
       }
       cell.addEventListener('click', () => {
-        command('show', { assetId: a.id, assetType: a.type });
+        command('show', { assetId: a.id, assetType: a.type, context: buildContext() });
       });
       grid.appendChild(cell);
     });
@@ -177,6 +191,7 @@
         d.appendChild(p);
         d.addEventListener('click', () => {
           state.albumId = al.id;
+          state.albumName = al.name;
           state.month = null;
           $('#months').style.display = 'flex';
           loadMonths();
@@ -219,6 +234,7 @@
     btn.addEventListener('click', () => {
       state.tab = btn.dataset.tab;
       state.albumId = null;
+      state.albumName = null;
       state.month = null;
       document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');

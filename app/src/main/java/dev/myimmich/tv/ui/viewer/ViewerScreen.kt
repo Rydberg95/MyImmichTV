@@ -60,6 +60,7 @@ import dev.myimmich.tv.remote.RemoteCommand
 import dev.myimmich.tv.remote.RemoteController
 import dev.myimmich.tv.remote.RemoteServer
 import dev.myimmich.tv.remote.RemoteViewerState
+import dev.myimmich.tv.remote.toAssetDto
 import dev.myimmich.tv.repo.LibraryRepository
 import dev.myimmich.tv.tls.TlsSupport
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -69,7 +70,7 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.random.Random
 
-enum class SourceKind { TIMELINE, FAVORITES, ALBUM }
+enum class SourceKind { TIMELINE, FAVORITES, ALBUM, SEARCH }
 
 data class LibrarySource(val kind: SourceKind, val label: String = "", val albumId: String? = null)
 
@@ -126,7 +127,7 @@ fun ViewerScreen(
     val assets: List<AssetDto> = remember(months, assetsByMonth) {
         months.flatMap { m -> assetsByMonth[m].orEmpty() }
     }
-    var index by remember(source) { mutableIntStateOf(0) }
+    var index by remember { mutableIntStateOf(0) }
     var infoShown by remember { mutableStateOf(false) }
     var stripShown by remember { mutableStateOf(false) }
     var menuShown by remember { mutableStateOf(false) }
@@ -145,6 +146,7 @@ fun ViewerScreen(
                 SourceKind.TIMELINE -> repo.monthAssets(bucket)
                 SourceKind.FAVORITES -> repo.favoriteMonthAssets(bucket)
                 SourceKind.ALBUM -> repo.albumMonthAssets(source.albumId ?: "", bucket)
+                SourceKind.SEARCH -> return
             }
             assetsByMonth = assetsByMonth + (bucket to list)
         } catch (e: Exception) {
@@ -162,20 +164,6 @@ fun ViewerScreen(
 
     var retryTick by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(source, retryTick) {
-        error = null
-        try {
-            val buckets = when (source.kind) {
-                SourceKind.TIMELINE -> repo.timelineBuckets()
-                SourceKind.FAVORITES -> repo.favoriteBuckets()
-                SourceKind.ALBUM -> repo.albumBuckets(source.albumId ?: "")
-            }
-            months = buckets.sortedByDescending { it.bucket }.map { it.bucket }
-            if (months.isNotEmpty()) loadMonth(months.first())
-        } catch (e: Exception) {
-            error = e.message ?: e.javaClass.simpleName
-        }
-    }
 
     LaunchedEffect(error) {
         if (error != null) {
@@ -205,6 +193,57 @@ fun ViewerScreen(
     }
 
     var remoteAsset by remember { mutableStateOf<AssetDto?>(null) }
+    var pendingShowId by remember { mutableStateOf<String?>(null) }
+    var pendingShowBucket by remember { mutableStateOf<String?>(null) }
+    var pendingSearchAssets by remember { mutableStateOf<List<AssetDto>?>(null) }
+
+    fun overrideAsset(id: String, type: String?) = AssetDto(
+        id = id, type = type ?: "IMAGE", fileCreatedAt = null,
+        isFavorite = false, durationMs = null, livePhotoVideoId = null,
+        thumbhash = null, city = null, country = null,
+    )
+
+    fun liveAssets(): List<AssetDto> = months.flatMap { m -> assetsByMonth[m].orEmpty() }
+
+    suspend fun resolvePendingShow() {
+        val id = pendingShowId ?: return
+        pendingShowId = null
+        val hint = pendingShowBucket
+        pendingShowBucket = null
+        if (hint != null && !assetsByMonth.containsKey(hint)) {
+            if (!months.contains(hint)) {
+                months = (months + hint).sortedByDescending { it }
+            }
+            loadMonth(hint)
+        }
+        val pos = liveAssets().indexOfFirst { it.id == id }
+        if (pos >= 0) {
+            remoteAsset = null
+            index = pos
+        }
+    }
+
+    LaunchedEffect(source, retryTick) {
+        error = null
+        if (source.kind == SourceKind.SEARCH) {
+            months = listOf("results")
+            assetsByMonth = mapOf("results" to (pendingSearchAssets.orEmpty()))
+            return@LaunchedEffect
+        }
+        try {
+            val buckets = when (source.kind) {
+                SourceKind.TIMELINE -> repo.timelineBuckets()
+                SourceKind.FAVORITES -> repo.favoriteBuckets()
+                SourceKind.ALBUM -> repo.albumBuckets(source.albumId ?: "")
+                SourceKind.SEARCH -> emptyList()
+            }
+            months = buckets.sortedByDescending { it.bucket }.map { it.bucket }
+            if (months.isNotEmpty()) loadMonth(months.first())
+            resolvePendingShow()
+        } catch (e: Exception) {
+            error = e.message ?: e.javaClass.simpleName
+        }
+    }
     val currentAsset: AssetDto? = remoteAsset ?: assets.getOrNull(index.coerceIn(0, (assets.size - 1).coerceAtLeast(0)))
 
     fun moveManual(delta: Int) {
@@ -233,16 +272,61 @@ fun ViewerScreen(
                 "show" -> {
                     val id = cmd.assetId
                     if (id != null) {
-                        val pos = assets.indexOfFirst { it.id == id }
-                        if (pos >= 0) {
-                            remoteAsset = null
-                            index = pos
-                        } else {
-                            remoteAsset = AssetDto(
-                                id = id, type = cmd.assetType ?: "IMAGE", fileCreatedAt = null,
-                                isFavorite = false, durationMs = null, livePhotoVideoId = null,
-                                thumbhash = null, city = null, country = null,
-                            )
+                        val ctx = cmd.context
+                        fun jumpWithin(bucket: String?) {
+                            val pos = liveAssets().indexOfFirst { it.id == id }
+                            if (pos >= 0) {
+                                remoteAsset = null
+                                index = pos
+                            } else {
+                                remoteAsset = overrideAsset(id, cmd.assetType)
+                                pendingShowId = id
+                                pendingShowBucket = bucket
+                                scope.launch { resolvePendingShow() }
+                            }
+                        }
+                        when {
+                            ctx != null && ctx.source == "search" && ctx.assets != null -> {
+                                val list = ctx.assets.map { it.toAssetDto() }
+                                pendingSearchAssets = list
+                                months = listOf("results")
+                                assetsByMonth = mapOf("results" to list)
+                                remoteAsset = null
+                                val pos = list.indexOfFirst { it.id == id }
+                                if (pos >= 0) index = pos
+                                source = LibrarySource(SourceKind.SEARCH, "Search results")
+                            }
+                            ctx != null && ctx.source == "album" && ctx.albumId != null -> {
+                                if (source.kind == SourceKind.ALBUM && source.albumId == ctx.albumId) {
+                                    jumpWithin(ctx.bucket)
+                                } else {
+                                    remoteAsset = overrideAsset(id, cmd.assetType)
+                                    pendingShowId = id
+                                    pendingShowBucket = ctx.bucket
+                                    source = LibrarySource(SourceKind.ALBUM, ctx.albumName ?: "Album", ctx.albumId)
+                                }
+                            }
+                            ctx != null && ctx.source == "favorites" -> {
+                                if (source.kind == SourceKind.FAVORITES) {
+                                    jumpWithin(ctx.bucket)
+                                } else {
+                                    remoteAsset = overrideAsset(id, cmd.assetType)
+                                    pendingShowId = id
+                                    pendingShowBucket = ctx.bucket
+                                    source = LibrarySource(SourceKind.FAVORITES, "Favorites")
+                                }
+                            }
+                            ctx != null && ctx.source == "timeline" -> {
+                                if (source.kind == SourceKind.TIMELINE) {
+                                    jumpWithin(ctx.bucket)
+                                } else {
+                                    remoteAsset = overrideAsset(id, cmd.assetType)
+                                    pendingShowId = id
+                                    pendingShowBucket = ctx.bucket
+                                    source = LibrarySource(SourceKind.TIMELINE, "Timeline")
+                                }
+                            }
+                            else -> jumpWithin(null)
                         }
                     }
                 }
@@ -263,7 +347,7 @@ fun ViewerScreen(
         remote.publish(
             RemoteViewerState(
                 source = source.kind.name,
-                label = if (source.kind == SourceKind.ALBUM) "Album - " + source.label else source.label,
+                label = source.label,
                 index = index,
                 total = assets.size,
                 assetId = a?.id,
@@ -386,12 +470,12 @@ fun ViewerScreen(
             },
     ) {
         when {
-            error != null && assets.isEmpty() -> CenteredMessage("Error: $error")
-            assets.isEmpty() -> CenteredMessage(
+            error != null && assets.isEmpty() && remoteAsset == null -> CenteredMessage("Error: $error")
+            assets.isEmpty() && remoteAsset == null -> CenteredMessage(
                 if (loadingBucket != null || months.isEmpty()) "Loading library…" else "This collection is empty"
             )
             else -> {
-                val safeIndex = index.coerceIn(0, assets.size - 1)
+                val safeIndex = if (assets.isEmpty()) 0 else index.coerceIn(0, assets.size - 1)
                 val current = currentAsset ?: assets[safeIndex]
                 if (current.isVideo) {
                     VideoPlayer(

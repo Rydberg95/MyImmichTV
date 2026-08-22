@@ -9,6 +9,16 @@ data class RemoteCommand(
     val assetId: String? = null,
     val assetType: String? = null,
     val value: Int? = null,
+    val context: RemoteCommandContext? = null,
+)
+
+@Serializable
+data class RemoteCommandContext(
+    val source: String,
+    val albumId: String? = null,
+    val albumName: String? = null,
+    val bucket: String? = null,
+    val assets: List<RemoteAsset>? = null,
 )
 
 @Serializable
@@ -54,6 +64,18 @@ data class RemoteAsset(
 data class RemotePerson(
     val id: String,
     val name: String,
+)
+
+fun RemoteAsset.toAssetDto() = dev.myimmich.tv.api.AssetDto(
+    id = id,
+    type = type,
+    fileCreatedAt = fileCreatedAt,
+    isFavorite = isFavorite,
+    durationMs = durationMs,
+    livePhotoVideoId = livePhotoVideoId,
+    thumbhash = thumbhash,
+    city = city,
+    country = country,
 )
 
 @Serializable
