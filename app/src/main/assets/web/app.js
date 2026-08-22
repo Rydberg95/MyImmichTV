@@ -131,6 +131,7 @@
     }
     const old = document.querySelector('.grid');
     if (old) old.remove();
+    const grid = document.createElement('div');
     grid.className = 'grid';
     assets.forEach((a) => {
       const cell = document.createElement('div');
@@ -380,6 +381,13 @@
       });
     } catch (e) {}
     setSetupStatus('');
+  });
+
+  window.addEventListener('error', (e) => {
+    const el = document.createElement('pre');
+    el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#5c1a1a;color:#ef9a9a;font-size:11px;padding:6px;z-index:99;white-space:pre-wrap;';
+    el.textContent = 'JS error: ' + e.message;
+    document.body.appendChild(el);
   });
 
   const hashPin = (location.hash || '').replace(/^#/, '').trim();
