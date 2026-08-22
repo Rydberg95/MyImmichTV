@@ -72,10 +72,18 @@ class SlideshowDreamService : DreamService() {
                 certFingerprint = config.certFingerprint.takeIf { it.isNotBlank() },
                 trustAny = config.trustAny,
             )
+            val authedHttp = http.newBuilder()
+                .addInterceptor { chain ->
+                    val r = chain.request().newBuilder()
+                        .header("x-api-key", config.apiKey)
+                        .build()
+                    chain.proceed(r)
+                }
+                .build()
             val client = ImmichClient(http, config.serverUrl, config.apiKey)
             val repo = LibraryRepository(client)
             val imageLoader = ImageLoader.Builder(this@SlideshowDreamService)
-                .components { add(ImmichThumbFetcher.Factory(http)) }
+                .components { add(ImmichThumbFetcher.Factory(authedHttp)) }
                 .build()
             loader = imageLoader
 

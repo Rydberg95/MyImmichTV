@@ -26,7 +26,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,7 +74,12 @@ enum class SourceKind { TIMELINE, FAVORITES, ALBUM }
 data class LibrarySource(val kind: SourceKind, val label: String = "", val albumId: String? = null)
 
 @Composable
-fun ViewerScreen(config: ServerConfig, settings: AppSettings, remote: RemoteController) {
+fun ViewerScreen(
+    config: ServerConfig,
+    settings: AppSettings,
+    remote: RemoteController,
+    remoteServer: RemoteServer,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -84,7 +88,7 @@ fun ViewerScreen(config: ServerConfig, settings: AppSettings, remote: RemoteCont
         trustAny = config.trustAny,
     )
 
-    val videoHttpClient = remember(config) {
+    val authedHttpClient = remember(config) {
         pinnedHttpClient().newBuilder()
             .addInterceptor { chain ->
                 val r = chain.request().newBuilder()
@@ -105,19 +109,14 @@ fun ViewerScreen(config: ServerConfig, settings: AppSettings, remote: RemoteCont
     val repo = remember(client) { LibraryRepository(client) }
     val imageLoader = remember(config) {
         ImageLoader.Builder(context)
-            .components { add(dev.myimmich.tv.api.ImmichThumbFetcher.Factory(pinnedHttpClient())) }
+            .components { add(dev.myimmich.tv.api.ImmichThumbFetcher.Factory(authedHttpClient)) }
             .build()
     }
 
     val intervalSec by settings.slideshowSeconds.collectAsStateWithLifecycle(initialValue = 10)
     val shufflePref by settings.slideshowShuffle.collectAsStateWithLifecycle(initialValue = false)
 
-    val remoteServer = remember(config) { RemoteServer(context, config, remote) }
     var pairingShown by remember { mutableStateOf(false) }
-    DisposableEffect(config) {
-        remoteServer.start()
-        onDispose { remoteServer.stop() }
-    }
 
     var source by remember { mutableStateOf(LibrarySource(SourceKind.TIMELINE)) }
     var months by remember(source) { mutableStateOf<List<String>>(emptyList()) }
@@ -395,7 +394,7 @@ fun ViewerScreen(config: ServerConfig, settings: AppSettings, remote: RemoteCont
                 if (current.isVideo) {
                     VideoPlayer(
                         url = client.originalUrl(current.id),
-                        httpClient = videoHttpClient,
+                        httpClient = authedHttpClient,
                         modifier = Modifier.fillMaxSize(),
                         toggleTick = videoToggleTick,
                         onEnded = { if (slideshowOn) advanceSlideshow() },

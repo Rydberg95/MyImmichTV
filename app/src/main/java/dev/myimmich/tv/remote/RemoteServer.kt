@@ -1,22 +1,24 @@
 package dev.myimmich.tv.remote
 
 import android.content.Context
+import android.util.Log
 import dev.myimmich.tv.api.AssetDto
 import dev.myimmich.tv.api.ImmichClient
+import dev.myimmich.tv.data.AppSettings
 import dev.myimmich.tv.data.ServerConfig
 import dev.myimmich.tv.tls.TlsSupport
 import io.ktor.http.ContentType
-import io.ktor.serialization.kotlinx.json.json
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.OutgoingContent
-import io.ktor.utils.io.writeFully
+import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
-import io.ktor.server.application.install
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
+import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.request.header
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.header
@@ -25,7 +27,11 @@ import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -35,29 +41,32 @@ import java.net.NetworkInterface
 
 class RemoteServer(
     private val context: Context,
-    private val config: ServerConfig,
     private val controller: RemoteController,
+    private val settings: AppSettings,
 ) {
     private var engine: EmbeddedServer<*, *>? = null
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val httpClient: OkHttpClient = TlsSupport.buildClient(
-        certFingerprint = config.certFingerprint.takeIf { it.isNotBlank() },
-        trustAny = config.trustAny,
-    )
+    @Volatile
+    private var currentConfig: ServerConfig? = null
 
-    private val client = ImmichClient(
-        http = httpClient,
-        serverUrl = config.serverUrl,
-        apiKey = config.apiKey,
-    )
+    @Volatile
+    private var proxyClient: ImmichClient? = null
+
+    @Volatile
+    private var proxyHttp: OkHttpClient? = null
+
+    private var pendingUrl: String? = null
+    private var pendingKey: String? = null
+    private var pendingFingerprint: String? = null
 
     private var webAssets: Map<String, ByteArray> = emptyMap()
 
     fun start() {
         if (engine != null) return
         loadWebAssets()
-        android.util.Log.d("ImmichTV", "Remote server on ${lanIpAddress()}:${controller.serverPort} PIN=${controller.pin}")
+        Log.d("ImmichTV", "Remote server on ${lanIpAddress()}:${controller.serverPort} PIN=${controller.pin}")
         val port = controller.serverPort
         engine = embeddedServer(CIO, port = port, host = "0.0.0.0") {
             module()
@@ -67,6 +76,21 @@ class RemoteServer(
     fun stop() {
         engine?.stop(500, 1500)
         engine = null
+    }
+
+    fun setConfig(config: ServerConfig?) {
+        currentConfig = config
+        if (config == null) {
+            proxyClient = null
+            proxyHttp = null
+        } else {
+            val http = TlsSupport.buildClient(
+                certFingerprint = config.certFingerprint.takeIf { it.isNotBlank() },
+                trustAny = config.trustAny,
+            )
+            proxyHttp = http
+            proxyClient = ImmichClient(http, config.serverUrl, config.apiKey)
+        }
     }
 
     private fun loadWebAssets() {
@@ -97,22 +121,19 @@ class RemoteServer(
     }
 
     private fun Application.module() {
-        install(io.ktor.server.plugins.contentnegotiation.ContentNegotiation) {
+        install(ContentNegotiation) {
             json(json)
         }
         routing {
-            get("/") {
-                call.serveStatic("index.html", "text/html")
+            get("/") { call.serveStatic("index.html", "text/html") }
+            get("/app.js") { call.serveStatic("app.js", "application/javascript") }
+            get("/style.css") { call.serveStatic("style.css", "text/css") }
+            get("/favicon.ico") { call.respondBytes(ByteArray(0), ContentType.Image.XIcon) }
+
+            get("/api/status") {
+                call.respond(AppStatusDto(configured = currentConfig != null, name = "My Immich TV"))
             }
-            get("/app.js") {
-                call.serveStatic("app.js", "application/javascript")
-            }
-            get("/style.css") {
-                call.serveStatic("style.css", "text/css")
-            }
-            get("/favicon.ico") {
-                call.respondBytes(ByteArray(0), ContentType.Image.XIcon)
-            }
+
             post("/api/pair") {
                 val body = call.receiveText()
                 val submitted = runCatching {
@@ -120,23 +141,64 @@ class RemoteServer(
                 }.getOrNull().orEmpty()
                 val token = controller.tryPair(submitted)
                 if (token != null) {
-                    call.respond(
-                        PairResponse(token = token, serverName = "My Immich TV")
-                    )
+                    call.respond(PairResponse(token = token, serverName = "My Immich TV"))
                 } else {
                     call.respond(HttpStatusCode.Forbidden)
                 }
             }
-            get("/api/pair/{pin}") {
-                val submitted = call.parameters["pin"].orEmpty()
-                val token = controller.tryPair(submitted)
-                if (token != null) {
-                    call.respond(
-                        PairResponse(token = token, serverName = "My Immich TV")
-                    )
-                } else {
+
+            post("/setup/submit") {
+                val body = call.receiveText()
+                val dto = runCatching {
+                    json.decodeFromString<SetupSubmitDto>(body)
+                }.getOrNull()
+                if (dto == null || !controller.checkPin(dto.pin)) {
                     call.respond(HttpStatusCode.Forbidden)
+                    return@post
                 }
+                submitSetup(dto.url, dto.apiKey)
+                call.respond(HttpStatusCode.Accepted)
+            }
+
+            post("/setup/confirm") {
+                val body = call.receiveText()
+                val dto = runCatching {
+                    json.decodeFromString<SetupPinDto>(body)
+                }.getOrNull()
+                if (dto == null || !controller.checkPin(dto.pin)) {
+                    call.respond(HttpStatusCode.Forbidden)
+                    return@post
+                }
+                val url = pendingUrl
+                val key = pendingKey
+                val fp = pendingFingerprint
+                if (url == null || key == null) {
+                    call.respond(HttpStatusCode.Conflict)
+                    return@post
+                }
+                validateAndSave(url, key, fp)
+                call.respond(HttpStatusCode.Accepted)
+            }
+
+            post("/setup/cancel") {
+                val body = call.receiveText()
+                val dto = runCatching {
+                    json.decodeFromString<SetupPinDto>(body)
+                }.getOrNull()
+                if (dto == null || !controller.checkPin(dto.pin)) {
+                    call.respond(HttpStatusCode.Forbidden)
+                    return@post
+                }
+                clearPending()
+                call.respond(HttpStatusCode.OK)
+            }
+
+            get("/setup/status") {
+                val state = controller.setupState.value
+                call.respond(
+                    if (currentConfig != null) state.copy(configured = true, phase = "DONE")
+                    else state
+                )
             }
             get("/r/{token}/state") {
                 if (!authorized(call)) return@get
@@ -160,75 +222,80 @@ class RemoteServer(
                 }
             }
             get("/r/{token}/buckets") {
-                if (!authorized(call)) return@get
+                val client = authorizedClient(call) ?: return@get
                 val albumId = call.request.queryParameters["album"]
                 val favorite = call.request.queryParameters["favorite"] == "true"
-                val buckets = withContext(Dispatchers.IO) {
-                    client.timeBuckets(
-                        buildMap {
-                            put("size", "MONTH")
-                            put("isArchived", "false")
-                            if (albumId != null) put("albumId", albumId)
-                            if (favorite) put("isFavorite", "true")
-                        }
-                    )
-                }
+                val buckets = client.timeBuckets(
+                    buildMap {
+                        put("size", "MONTH")
+                        put("isArchived", "false")
+                        if (albumId != null) put("albumId", albumId)
+                        if (favorite) put("isFavorite", "true")
+                    }
+                )
                 call.respond(buckets)
             }
             get("/r/{token}/assets") {
-                if (!authorized(call)) return@get
+                val client = authorizedClient(call) ?: return@get
                 val bucket = call.request.queryParameters["bucket"] ?: run {
                     call.respond(HttpStatusCode.BadRequest); return@get
                 }
                 val albumId = call.request.queryParameters["album"]
                 val favorite = call.request.queryParameters["favorite"] == "true"
-                val assets = withContext(Dispatchers.IO) {
-                    client.bucketAssets(
-                        buildMap {
-                            put("size", "MONTH")
-                            put("timeBucket", bucket)
-                            put("isArchived", "false")
-                            if (albumId != null) put("albumId", albumId)
-                            if (favorite) put("isFavorite", "true")
-                        }
-                    )
-                }
+                val assets = client.bucketAssets(
+                    buildMap {
+                        put("size", "MONTH")
+                        put("timeBucket", bucket)
+                        put("isArchived", "false")
+                        if (albumId != null) put("albumId", albumId)
+                        if (favorite) put("isFavorite", "true")
+                    }
+                )
                 call.respond(assets.map { it.toRemote() })
             }
             get("/r/{token}/albums") {
-                if (!authorized(call)) return@get
-                val albums = withContext(Dispatchers.IO) { client.albums() }
+                val client = authorizedClient(call) ?: return@get
+                val albums = client.albums()
                 call.respond(albums.map { RemoteAlbum(it.id, it.albumName, it.assetCount) })
             }
             get("/r/{token}/search") {
-                if (!authorized(call)) return@get
+                val client = authorizedClient(call) ?: return@get
                 val query = call.request.queryParameters["q"].orEmpty()
                 if (query.isBlank()) {
                     call.respond(emptyList<RemoteAsset>()); return@get
                 }
-                val assets = withContext(Dispatchers.IO) { client.smartSearch(query) }
+                val assets = client.smartSearch(query)
                 call.respond(assets.map { it.toRemote() })
             }
             get("/r/{token}/people") {
-                if (!authorized(call)) return@get
-                val people = withContext(Dispatchers.IO) { client.people() }
+                val client = authorizedClient(call) ?: return@get
+                val people = client.people()
                 call.respond(people.map { RemotePerson(it.id, it.name ?: "Unknown") })
             }
             get("/r/{token}/thumb/{id}") {
-                if (!authorized(call)) return@get
+                val config = currentConfig
+                if (!authorized(call) || config == null) {
+                    call.respond(HttpStatusCode.ServiceUnavailable); return@get
+                }
                 val id = call.parameters["id"] ?: run {
                     call.respond(HttpStatusCode.BadRequest); return@get
                 }
                 val size = call.request.queryParameters["size"] ?: "preview"
+                val client = proxyClient ?: run {
+                    call.respond(HttpStatusCode.ServiceUnavailable); return@get
+                }
                 val url = if (size == "thumbnail") client.smallThumbUrl(id) else client.thumbnailUrl(id)
-                proxyImage(call, url)
+                proxyImage(call, url, config)
             }
             get("/r/{token}/original/{id}") {
-                if (!authorized(call)) return@get
+                val config = currentConfig
+                if (!authorized(call) || config == null) {
+                    call.respond(HttpStatusCode.ServiceUnavailable); return@get
+                }
                 val id = call.parameters["id"] ?: run {
                     call.respond(HttpStatusCode.BadRequest); return@get
                 }
-                proxyOriginal(call, client.originalUrl(id))
+                proxyOriginal(call, proxyClient!!.originalUrl(id), config)
             }
         }
     }
@@ -236,6 +303,115 @@ class RemoteServer(
     private fun authorized(call: ApplicationCall): Boolean {
         val token = call.parameters["token"]
         return controller.isAuthorized(token)
+    }
+
+    private suspend fun authorizedClient(call: ApplicationCall): ImmichClient? {
+        if (!authorized(call)) {
+            call.respond(HttpStatusCode.Forbidden)
+            return null
+        }
+        val client = proxyClient
+        if (client == null) {
+            call.respond(HttpStatusCode.ServiceUnavailable)
+            return null
+        }
+        return client
+    }
+
+    private fun clearPending() {
+        pendingUrl = null
+        pendingKey = null
+        pendingFingerprint = null
+        controller.updateSetup(SetupState())
+    }
+
+    private fun maskKey(key: String): String {
+        if (key.length <= 4) return "...."
+        return "\u2022".repeat(8) + key.takeLast(4)
+    }
+
+    private fun submitSetup(url: String, apiKey: String) {
+        val trimmed = url.trim().trimEnd('/')
+        scope.launch {
+            if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+                controller.updateSetup(SetupState(phase = "ERROR", error = "URL must start with http:// or https://"))
+                return@launch
+            }
+            controller.updateSetup(
+                SetupState(phase = "PROBING", url = trimmed, apiKeyMasked = maskKey(apiKey))
+            )
+            val probe = TlsSupport.probe("$trimmed/api/server/ping")
+            when (probe) {
+                is TlsSupport.ProbeResult.Trusted -> validateAndSave(trimmed, apiKey, null)
+                is TlsSupport.ProbeResult.Untrusted -> {
+                    pendingUrl = trimmed
+                    pendingKey = apiKey
+                    pendingFingerprint = probe.cert.fingerprint
+                    controller.updateSetup(
+                        SetupState(
+                            phase = "AWAITING_CONFIRM",
+                            url = trimmed,
+                            apiKeyMasked = maskKey(apiKey),
+                            fingerprint = probe.cert.fingerprint,
+                            subject = probe.cert.subject,
+                            issuer = probe.cert.issuer,
+                        )
+                    )
+                }
+                is TlsSupport.ProbeResult.Error -> {
+                    controller.updateSetup(
+                        SetupState(phase = "ERROR", url = trimmed, error = probe.message)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun validateAndSave(url: String, apiKey: String, certFingerprint: String?) {
+        scope.launch {
+            controller.updateSetup(
+                SetupState(phase = "CONNECTING", url = url, apiKeyMasked = maskKey(apiKey))
+            )
+            try {
+                val http = TlsSupport.buildClient(certFingerprint, false)
+                val client = ImmichClient(http, url, apiKey)
+                val user = client.me()
+                settings.saveServer(
+                    ServerConfig(
+                        serverUrl = url,
+                        apiKey = apiKey,
+                        certFingerprint = certFingerprint.orEmpty(),
+                        trustAny = false,
+                    )
+                )
+                setConfig(
+                    ServerConfig(
+                        serverUrl = url,
+                        apiKey = apiKey,
+                        certFingerprint = certFingerprint.orEmpty(),
+                        trustAny = false,
+                    )
+                )
+                controller.updateSetup(
+                    SetupState(
+                        phase = "DONE",
+                        url = url,
+                        apiKeyMasked = maskKey(apiKey),
+                        configured = true,
+                    )
+                )
+                Log.d("ImmichTV", "Setup complete for ${user.name ?: user.email}")
+            } catch (e: Exception) {
+                controller.updateSetup(
+                    SetupState(
+                        phase = "ERROR",
+                        url = url,
+                        apiKeyMasked = maskKey(apiKey),
+                        error = e.message ?: e.javaClass.simpleName,
+                    )
+                )
+            }
+        }
     }
 
     private suspend fun ApplicationCall.serveStatic(name: String, mime: String) {
@@ -248,13 +424,16 @@ class RemoteServer(
         }
     }
 
-    private suspend fun proxyImage(call: ApplicationCall, url: String) {
+    private suspend fun proxyImage(call: ApplicationCall, url: String, config: ServerConfig) {
         withContext(Dispatchers.IO) {
+            val http = proxyHttp ?: run {
+                call.respond(HttpStatusCode.ServiceUnavailable); return@withContext
+            }
             val request = Request.Builder()
                 .url(url)
                 .header("x-api-key", config.apiKey)
                 .build()
-            httpClient.newCall(request).execute().use { resp ->
+            http.newCall(request).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     call.respond(HttpStatusCode.InternalServerError)
                     return@withContext
@@ -267,8 +446,11 @@ class RemoteServer(
         }
     }
 
-    private suspend fun proxyOriginal(call: ApplicationCall, url: String) {
+    private suspend fun proxyOriginal(call: ApplicationCall, url: String, config: ServerConfig) {
         withContext(Dispatchers.IO) {
+            val http = proxyHttp ?: run {
+                call.respond(HttpStatusCode.ServiceUnavailable); return@withContext
+            }
             val rangeHeader = call.request.header("Range")
             val builder = Request.Builder()
                 .url(url)
@@ -276,7 +458,7 @@ class RemoteServer(
             if (rangeHeader != null) {
                 builder.header("Range", rangeHeader)
             }
-            val response = httpClient.newCall(builder.build()).execute()
+            val response = http.newCall(builder.build()).execute()
             val body = response.body
             if (!response.isSuccessful || body == null) {
                 response.close()

@@ -55,3 +55,33 @@ data class RemotePerson(
     val id: String,
     val name: String,
 )
+
+@Serializable
+data class SetupState(
+    val phase: String = "WAITING",
+    val url: String? = null,
+    val apiKeyMasked: String? = null,
+    val fingerprint: String? = null,
+    val subject: String? = null,
+    val issuer: String? = null,
+    val error: String? = null,
+    val configured: Boolean = false,
+)
+
+@Serializable
+data class SetupSubmitDto(
+    val pin: String,
+    val url: String,
+    val apiKey: String,
+)
+
+@Serializable
+data class SetupPinDto(
+    val pin: String,
+)
+
+@Serializable
+data class AppStatusDto(
+    val configured: Boolean,
+    val name: String,
+)

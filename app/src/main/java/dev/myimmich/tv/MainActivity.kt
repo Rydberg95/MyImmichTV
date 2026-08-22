@@ -51,7 +51,9 @@ private fun Root(flow: kotlinx.coroutines.flow.Flow<ConfigState>) {
             initialKey = "",
             onSaved = {},
             saveConfig = app.settings::saveServer,
+            remote = app.remote,
+            remoteServer = app.remoteServer,
         )
-        is ConfigState.Ready -> ViewerScreen(s.config, app.settings, app.remote)
+        is ConfigState.Ready -> ViewerScreen(s.config, app.settings, app.remote, app.remoteServer)
     }
 }

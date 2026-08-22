@@ -10,9 +10,11 @@ class RemoteController {
 
     val commands: SharedFlow<RemoteCommand> get() = _commands
     val viewerState: StateFlow<RemoteViewerState?> get() = _viewerState
+    val setupState: StateFlow<SetupState> get() = _setupState
 
     private val _commands = MutableSharedFlow<RemoteCommand>(extraBufferCapacity = 32)
     private val _viewerState = MutableStateFlow<RemoteViewerState?>(null)
+    private val _setupState = MutableStateFlow(SetupState())
 
     private val sessions = HashMap<String, Long>()
     private val random = SecureRandom()
@@ -34,9 +36,13 @@ class RemoteController {
         generatePin()
     }
 
+    fun checkPin(submitted: String?): Boolean {
+        return submitted != null && submitted.trim() == pin
+    }
+
     @Synchronized
     fun tryPair(submitted: String): String? {
-        if (submitted.trim() == pin) {
+        if (checkPin(submitted)) {
             val bytes = ByteArray(16)
             random.nextBytes(bytes)
             val token = bytes.joinToString("") { "%02x".format(it) }
@@ -55,6 +61,10 @@ class RemoteController {
     @Synchronized
     fun revokeAll() {
         sessions.clear()
+    }
+
+    fun updateSetup(state: SetupState) {
+        _setupState.value = state
     }
 
     fun send(command: RemoteCommand) {

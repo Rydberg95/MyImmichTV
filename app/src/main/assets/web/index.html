@@ -16,6 +16,26 @@
   </form>
   <p id="pairError" class="error"></p>
 </div>
+<div id="setup" class="pair hidden">
+  <h1>Set up My Immich TV</h1>
+  <p class="muted">Type your server details — the TV does the rest</p>
+  <form id="setupForm">
+    <input id="setupPin" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="PIN from TV">
+    <input id="setupUrl" type="url" autocomplete="off" placeholder="https://immich.example.lan">
+    <input id="setupKey" type="password" autocomplete="off" placeholder="API key (Immich > Settings > API Keys)">
+    <button type="submit">Connect TV</button>
+  </form>
+  <div id="setupCert" class="cert hidden">
+    <p>Self-signed certificate detected.<br>Verify this SHA-256 fingerprint:</p>
+    <code id="setupFp"></code>
+    <div class="row">
+      <button id="setupTrust" class="primary">It matches — trust it</button>
+      <button id="setupCancel">Cancel</button>
+    </div>
+  </div>
+  <p id="setupStatus" class="muted"></p>
+  <p id="setupError" class="error"></p>
+</div>
 <div id="app" class="app hidden">
   <header>
     <div class="brand">My Immich TV</div>

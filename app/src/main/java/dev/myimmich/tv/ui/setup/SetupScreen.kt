@@ -1,7 +1,9 @@
 package dev.myimmich.tv.ui.setup
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,12 +11,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -29,16 +31,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.myimmich.tv.data.ServerConfig
+import dev.myimmich.tv.remote.QrBitmap
+import dev.myimmich.tv.remote.RemoteController
+import dev.myimmich.tv.remote.RemoteServer
+import dev.myimmich.tv.remote.SetupState
 import dev.myimmich.tv.tls.TlsSupport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-private enum class SetupPhase { Idle, Probing, AwaitPin, Connecting, Done, Failed }
 
 @Composable
 fun SetupScreen(
@@ -46,22 +53,20 @@ fun SetupScreen(
     initialKey: String,
     onSaved: () -> Unit,
     saveConfig: suspend (ServerConfig) -> Unit,
+    remote: RemoteController,
+    remoteServer: RemoteServer,
 ) {
     var url by rememberSaveable { mutableStateOf(initialUrl) }
     var apiKey by rememberSaveable { mutableStateOf(initialKey) }
-    var phase by remember { mutableStateOf(SetupPhase.Idle) }
-    var message by remember { mutableStateOf<String?>(null) }
-    var pending by remember { mutableStateOf<TlsSupport.CertInfo?>(null) }
+    var manual by remember { mutableStateOf(false) }
+    val setupState by remote.setupState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     fun fail(msg: String) {
-        phase = SetupPhase.Failed
-        message = msg
+        manual = true
     }
 
     fun validateAndSave(cert: TlsSupport.CertInfo?) {
-        phase = SetupPhase.Connecting
-        message = null
         scope.launch {
             try {
                 val client = dev.myimmich.tv.api.ImmichClient(
@@ -81,112 +86,141 @@ fun SetupScreen(
                         trustAny = false,
                     )
                 )
-                phase = SetupPhase.Done
-                message = "Connected as ${user.name ?: user.email ?: user.id}"
                 onSaved()
             } catch (e: Exception) {
-                fail("Connection failed: ${e.message}")
+                manual = true
             }
         }
     }
 
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0A0D10))
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 160.dp, vertical = 48.dp),
+            .padding(48.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text("Set up from your phone", style = MaterialTheme.typography.titleLarge, color = Color(0xFF80DEEA))
+            Text(
+                "Scan with your phone camera",
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color(0xFFB0BEC5),
+            )
+            Image(
+                bitmap = QrBitmap.generate(remoteServer.pairingUrl()).asImageBitmap(),
+                contentDescription = "Setup QR code",
+                modifier = Modifier.size(380.dp),
+            )
+            Text(
+                remoteServer.pairingUrl(),
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+                color = Color(0xFFECEFF1),
+            )
+            Text(
+                "PIN " + remote.pin,
+                style = MaterialTheme.typography.titleLarge,
+                fontFamily = FontFamily.Monospace,
+                color = Color(0xFF80DEEA),
+            )
+            SetupStatusLabel(setupState)
+            OutlinedButton(onClick = { manual = !manual }) {
+                Text(if (manual) "Hide manual setup" else "Set up with TV remote instead")
+            }
+        }
+        Spacer(Modifier.width(80.dp))
+        if (manual) {
+            ManualSetupForm(
+                url = url,
+                apiKey = apiKey,
+                onUrl = { url = it },
+                onKey = { apiKey = it },
+                onConnect = {
+                    if (url.isBlank() || apiKey.isBlank()) {
+                        fail("blank")
+                    } else {
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                TlsSupport.probe(url.trim().trimEnd('/') + "/api/server/ping")
+                            }
+                            when (result) {
+                                is TlsSupport.ProbeResult.Trusted -> validateAndSave(null)
+                                is TlsSupport.ProbeResult.Untrusted -> validateAndSave(result.cert)
+                                is TlsSupport.ProbeResult.Error -> fail("unreachable")
+                            }
+                        }
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SetupStatusLabel(state: SetupState) {
+    val text = when (state.phase) {
+        "PROBING" -> "Contacting server…"
+        "AWAITING_CONFIRM" -> "Check the fingerprint on your phone"
+        "CONNECTING" -> "Validating API key…"
+        "DONE" -> "Connected"
+        "ERROR" -> "Error: " + (state.error ?: "unknown")
+        else -> null
+    }
+    text?.let {
+        val color = when (state.phase) {
+            "DONE" -> Color(0xFFA5D6A7)
+            "ERROR" -> Color(0xFFEF9A9A)
+            else -> Color(0xFFB0BEC5)
+        }
+        Text(it, style = MaterialTheme.typography.titleMedium, color = color)
+    }
+}
+
+@Composable
+private fun ManualSetupForm(
+    url: String,
+    apiKey: String,
+    onUrl: (String) -> Unit,
+    onKey: (String) -> Unit,
+    onConnect: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth(0.4f)
+            .background(Color(0xFF10161C))
+            .padding(32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("My Immich TV", style = MaterialTheme.typography.displaySmall, color = Color(0xFF80DEEA))
-        Text("Connect to your Immich server", style = MaterialTheme.typography.bodyLarge)
-
+        Text("Manual setup", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
             value = url,
-            onValueChange = { url = it },
+            onValueChange = onUrl,
             label = { Text("Server URL") },
             placeholder = { Text("https://immich.your.home") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-
         OutlinedTextField(
             value = apiKey,
-            onValueChange = { apiKey = it },
+            onValueChange = onKey,
             label = { Text("API key") },
-            placeholder = { Text("Immich > Account > API Keys") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             modifier = Modifier.fillMaxWidth(),
         )
-
-        Button(
-            onClick = {
-                if (url.isBlank() || apiKey.isBlank()) {
-                    fail("Server URL and API key are required")
-                    return@Button
-                }
-                phase = SetupPhase.Probing
-                message = null
-                scope.launch {
-                    val result = withContext(Dispatchers.IO) {
-                        TlsSupport.probe(url.trim().trimEnd('/') + "/api/server/ping")
-                    }
-                    when (result) {
-                        is TlsSupport.ProbeResult.Trusted -> validateAndSave(null)
-                        is TlsSupport.ProbeResult.Untrusted -> {
-                            pending = result.cert
-                            phase = SetupPhase.AwaitPin
-                        }
-                        is TlsSupport.ProbeResult.Error -> fail("Cannot reach server: ${result.message}")
-                    }
-                }
-            },
-            enabled = phase != SetupPhase.Probing && phase != SetupPhase.Connecting,
-        ) {
-            Text(if (phase == SetupPhase.Probing || phase == SetupPhase.Connecting) "Working…" else "Connect")
-        }
-
-        when (phase) {
-            SetupPhase.Probing, SetupPhase.Connecting -> CircularProgressIndicator()
-            SetupPhase.AwaitPin -> {
-                val cert = pending
-                if (cert != null) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xFF1C262E))
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text("Self-signed certificate detected.", style = MaterialTheme.typography.titleMedium)
-                        Text("Verify this SHA-256 fingerprint against your reverse proxy certificate:")
-                        Text(
-                            cert.fingerprint,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFF80DEEA),
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Button(onClick = { validateAndSave(cert) }) { Text("It matches — trust it") }
-                            OutlinedButton(onClick = {
-                                phase = SetupPhase.Idle
-                                pending = null
-                            }) { Text("Cancel") }
-                        }
-                    }
-                }
-            }
-            else -> {}
-        }
-
-        message?.let {
-            val color = if (phase == SetupPhase.Failed) Color(0xFFEF9A9A) else Color(0xFFA5D6A7)
-            Text(it, color = color)
-        }
-
-        Spacer(Modifier.width(1.dp))
+        Button(onClick = onConnect) { Text("Connect") }
+        Text(
+            "Fingerprint verification happens on first connect",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFF78909C),
+        )
     }
 }

@@ -6,6 +6,7 @@ import coil3.fetch.FetchResult
 import coil3.fetch.Fetcher
 import coil3.fetch.SourceFetchResult
 import coil3.request.Options
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -22,9 +23,17 @@ class ImmichThumbFetcher(
 ) : Fetcher {
 
     override suspend fun fetch(): FetchResult? = withContext(Dispatchers.IO) {
-        val response = http.newCall(Request.Builder().url(data.url).build()).execute()
+        val response = try {
+            http.newCall(Request.Builder().url(data.url).build()).execute()
+        } catch (e: Exception) {
+            Log.w("ImmichTV", "Image fetch failed for ${data.url.takeLast(60)}: ${e.message}")
+            return@withContext null
+        }
         try {
-            if (!response.isSuccessful) return@withContext null
+            if (!response.isSuccessful) {
+                Log.w("ImmichTV", "Image fetch HTTP ${response.code} for ${data.url.takeLast(60)}")
+                return@withContext null
+            }
             val bytes = response.body?.bytes() ?: return@withContext null
             SourceFetchResult(
                 source = coil3.decode.ImageSource(Buffer().apply { write(bytes) }, FileSystem.SYSTEM),

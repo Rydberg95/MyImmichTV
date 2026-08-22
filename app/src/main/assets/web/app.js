@@ -283,15 +283,126 @@
   }
   setInterval(pollState, 2000);
 
-  const hashPin = (location.hash || '').replace(/^#/, '').trim();
-  if (hashPin && !state.token) {
-    $('#pinInput').value = hashPin;
-    pair(hashPin).catch(() => { $('#pairError').textContent = 'Wrong PIN'; });
-  } else if (state.token) {
-    fetch(`/r/${state.token}/state`).then((r) => {
-      if (r.ok) showApp(); else logout();
-    }).catch(() => showPair());
-  } else {
-    showPair();
+  const setup = {
+    pin: null,
+    polling: null,
+    url: null,
+    key: null,
+  };
+
+  function showSetup(hashPin) {
+    $('#pair').classList.add('hidden');
+    $('#app').classList.add('hidden');
+    $('#setup').classList.remove('hidden');
+    if (hashPin) $('#setupPin').value = hashPin;
+    $('#setupPin').focus();
   }
+
+  function hideSetup() {
+    $('#setup').classList.add('hidden');
+    if (setup.polling) { clearInterval(setup.polling); setup.polling = null; }
+  }
+
+  function setSetupStatus(text, isError) {
+    $('#setupStatus').textContent = text || '';
+    $('#setupError').textContent = isError ? text : '';
+    if (!isError) $('#setupStatus').textContent = text || '';
+  }
+
+  async function submitSetup(acceptCert) {
+    const pin = $('#setupPin').value.trim();
+    const url = $('#setupUrl').value.trim();
+    const key = $('#setupKey').value.trim();
+    if (pin.length !== 6 || !url || !key) {
+      setSetupStatus('Fill in PIN, server URL and API key', true);
+      return;
+    }
+    setup.pin = pin; setup.url = url; setup.key = key;
+    $('#setupCert').classList.add('hidden');
+    setSetupStatus('Contacting server…');
+    try {
+      await fetch('/setup/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pin, url: url, apiKey: key }),
+      });
+      if (!setup.polling) {
+        setup.polling = setInterval(pollSetup, 1200);
+        pollSetup();
+      }
+    } catch (e) {
+      setSetupStatus('Cannot reach the TV', true);
+    }
+  }
+
+  async function pollSetup() {
+    try {
+      const s = await fetch('/setup/status').then((r) => r.json());
+      if (s.phase === 'AWAITING_CONFIRM') {
+        $('#setupFp').textContent = s.fingerprint;
+        $('#setupCert').classList.remove('hidden');
+        setSetupStatus('Confirm the certificate fingerprint');
+      } else if (s.phase === 'PROBING') {
+        setSetupStatus('Contacting ' + (s.url || 'server') + '…');
+      } else if (s.phase === 'CONNECTING') {
+        setSetupStatus('Validating API key…');
+      } else if (s.phase === 'DONE' || s.configured) {
+        hideSetup();
+        await pair(setup.pin || $('#setupPin').value.trim());
+      } else if (s.phase === 'ERROR') {
+        setSetupStatus('Error: ' + (s.error || 'unknown'), true);
+        if (setup.polling) { clearInterval(setup.polling); setup.polling = null; }
+      }
+    } catch (e) { /* transient */ }
+  }
+
+  $('#setupForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitSetup(false);
+  });
+  $('#setupTrust').addEventListener('click', async () => {
+    try {
+      await fetch('/setup/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: setup.pin }),
+      });
+      setSetupStatus('Saving…');
+    } catch (e) { setSetupStatus('Cannot reach the TV', true); }
+  });
+  $('#setupCancel').addEventListener('click', async () => {
+    $('#setupCert').classList.add('hidden');
+    try {
+      await fetch('/setup/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: setup.pin }),
+      });
+    } catch (e) {}
+    setSetupStatus('');
+  });
+
+  const hashPin = (location.hash || '').replace(/^#/, '').trim();
+
+  async function boot() {
+    let status = null;
+    try {
+      status = await fetch('/api/status').then((r) => r.json());
+    } catch (e) {}
+    if (status && !status.configured) {
+      showSetup(hashPin);
+      return;
+    }
+    if (hashPin && !state.token) {
+      $('#pinInput').value = hashPin;
+      pair(hashPin).catch(() => { $('#pairError').textContent = 'Wrong PIN'; });
+    } else if (state.token) {
+      fetch(`/r/${state.token}/state`).then((r) => {
+        if (r.ok) showApp(); else logout();
+      }).catch(() => showPair());
+    } else {
+      showPair();
+    }
+  }
+  boot();
 })();
