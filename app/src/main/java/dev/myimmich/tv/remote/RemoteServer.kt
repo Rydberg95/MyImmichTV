@@ -233,8 +233,8 @@ class RemoteServer(
                         slideshowSeconds = settings.slideshowSeconds.first(),
                         dreamSeconds = settings.dreamSeconds.first(),
                         dreamIncludeVideos = settings.dreamIncludeVideos.first(),
-                        dreamSourceId = settings.dreamSourceId.first(),
-                        dreamSourceName = settings.dreamSourceName.first(),
+                        dreamShowInfo = settings.dreamShowInfo.first(),
+                        dreamSources = settings.dreamSources.first(),
                     )
                 )
             }
@@ -251,10 +251,17 @@ class RemoteServer(
                 if (dto.slideshowSeconds != null) settings.setSlideshowSeconds(dto.slideshowSeconds)
                 if (dto.dreamSeconds != null) settings.setDreamSeconds(dto.dreamSeconds)
                 if (dto.dreamIncludeVideos != null) settings.setDreamIncludeVideos(dto.dreamIncludeVideos)
-                if (dto.dreamSourceId != null) {
-                    settings.setDreamSource(dto.dreamSourceId, dto.dreamSourceName ?: "")
-                }
-                call.respond(HttpStatusCode.OK)
+                if (dto.dreamShowInfo != null) settings.setDreamShowInfo(dto.dreamShowInfo)
+                if (dto.dreamSources != null) settings.setDreamSources(dto.dreamSources)
+                call.respond(
+                    SettingsDto(
+                        slideshowSeconds = settings.slideshowSeconds.first(),
+                        dreamSeconds = settings.dreamSeconds.first(),
+                        dreamIncludeVideos = settings.dreamIncludeVideos.first(),
+                        dreamShowInfo = settings.dreamShowInfo.first(),
+                        dreamSources = settings.dreamSources.first(),
+                    )
+                )
             }
             post("/r/{token}/cert/reprobe") {
                 if (!authorized(call)) return@post

@@ -121,3 +121,33 @@ data class PersonDto(
 data class PeopleResponseDto(
     val people: List<PersonDto> = emptyList(),
 )
+
+/** Tolerant shape of GET /api/assets/{id}; every field may be absent. */
+@Serializable
+data class ExifInfoDto(
+    val make: String? = null,
+    val model: String? = null,
+    val lensModel: String? = null,
+    val exifImageWidth: Int? = null,
+    val exifImageHeight: Int? = null,
+    val fNumber: Double? = null,
+    val exposureTime: kotlinx.serialization.json.JsonElement? = null,
+    val iso: Int? = null,
+    val focalLength: Double? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val country: String? = null,
+    val description: String? = null,
+    val fileSize: Long? = null,
+)
+
+@Serializable
+data class AssetDetailDto(
+    val id: String = "",
+    val type: String? = null,
+    val originalFileName: String? = null,
+    val fileCreatedAt: String? = null,
+    val duration: kotlinx.serialization.json.JsonElement? = null,
+    val isFavorite: Boolean? = null,
+    val exifInfo: ExifInfoDto? = null,
+)

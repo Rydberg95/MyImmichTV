@@ -136,8 +136,8 @@ data class SettingsDto(
     val slideshowSeconds: Int,
     val dreamSeconds: Int,
     val dreamIncludeVideos: Boolean,
-    val dreamSourceId: String,
-    val dreamSourceName: String,
+    val dreamShowInfo: Boolean,
+    val dreamSources: List<dev.myimmich.tv.data.DreamSource>,
 )
 
 /** Partial update: only non-null fields are applied. */
@@ -146,6 +146,6 @@ data class SettingsUpdateDto(
     val slideshowSeconds: Int? = null,
     val dreamSeconds: Int? = null,
     val dreamIncludeVideos: Boolean? = null,
-    val dreamSourceId: String? = null,
-    val dreamSourceName: String? = null,
+    val dreamShowInfo: Boolean? = null,
+    val dreamSources: List<dev.myimmich.tv.data.DreamSource>? = null,
 )

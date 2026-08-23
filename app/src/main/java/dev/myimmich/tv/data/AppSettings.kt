@@ -13,13 +13,14 @@ import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
-private val pinsJson = Json { ignoreUnknownKeys = true }
+private val dreamJson = Json { ignoreUnknownKeys = true }
 
 data class ServerConfig(
     val serverUrl: String,
     val apiKey: String,
     val certFingerprint: String,
     val trustAny: Boolean,
+    /** Pins for the issuing CA(s) seen at setup (DER + SPKI fingerprints). Leaves may rotate; these hold. */
     val caPins: List<String> = emptyList(),
 )
 
@@ -29,16 +30,18 @@ class AppSettings(private val context: Context) {
         val serverUrl = stringPreferencesKey("server_url")
         val apiKey = stringPreferencesKey("api_key")
         val certFingerprint = stringPreferencesKey("cert_fingerprint")
-        val trustAny = booleanPreferencesKey("trust_any")
         val caPins = stringPreferencesKey("ca_pins")
+        val trustAny = booleanPreferencesKey("trust_any")
         val slideshowSeconds = intPreferencesKey("slideshow_seconds")
         val slideshowShuffle = booleanPreferencesKey("slideshow_shuffle")
         val highQuality = booleanPreferencesKey("high_quality")
         val remoteEnabled = booleanPreferencesKey("remote_enabled")
         val dreamSourceId = stringPreferencesKey("dream_source_id")
         val dreamSourceName = stringPreferencesKey("dream_source_name")
+        val dreamSources = stringPreferencesKey("dream_sources")
         val dreamSeconds = intPreferencesKey("dream_seconds")
         val dreamIncludeVideos = booleanPreferencesKey("dream_include_videos")
+        val dreamShowInfo = booleanPreferencesKey("dream_show_info")
     }
 
     val serverConfig: Flow<ServerConfig?> = context.dataStore.data.map { p ->
@@ -53,7 +56,8 @@ class AppSettings(private val context: Context) {
                 certFingerprint = p[Keys.certFingerprint] ?: "",
                 trustAny = p[Keys.trustAny] ?: false,
                 caPins = p[Keys.caPins]?.let { raw ->
-                    runCatching { pinsJson.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
+                    runCatching { dreamJson.decodeFromString<List<String>>(raw) }
+                        .getOrDefault(emptyList())
                 } ?: emptyList(),
             )
         }
@@ -64,11 +68,24 @@ class AppSettings(private val context: Context) {
     val slideshowShuffle: Flow<Boolean> = context.dataStore.data.map { it[Keys.slideshowShuffle] ?: false }
     val remoteEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.remoteEnabled] ?: true }
 
-    /** "" = timeline, "favorites" = favorites, anything else = album id */
-    val dreamSourceId: Flow<String> = context.dataStore.data.map { it[Keys.dreamSourceId] ?: "" }
-    val dreamSourceName: Flow<String> = context.dataStore.data.map { it[Keys.dreamSourceName] ?: "" }
+    /** Screensaver sources; empty list = timeline (default). Migrates the old single-source keys. */
+    val dreamSources: Flow<List<DreamSource>> = context.dataStore.data.map { p ->
+        val raw = p[Keys.dreamSources]
+        if (!raw.isNullOrBlank()) {
+            runCatching { dreamJson.decodeFromString<List<DreamSource>>(raw) }.getOrDefault(emptyList())
+        } else {
+            val legacyId = p[Keys.dreamSourceId] ?: ""
+            val legacyName = p[Keys.dreamSourceName] ?: ""
+            when {
+                legacyId.isBlank() -> emptyList()
+                legacyId == "favorites" -> listOf(DreamSource("favorites"))
+                else -> listOf(DreamSource("album", legacyId, legacyName.ifBlank { null }))
+            }
+        }
+    }
     val dreamSeconds: Flow<Int> = context.dataStore.data.map { it[Keys.dreamSeconds] ?: 10 }
     val dreamIncludeVideos: Flow<Boolean> = context.dataStore.data.map { it[Keys.dreamIncludeVideos] ?: false }
+    val dreamShowInfo: Flow<Boolean> = context.dataStore.data.map { it[Keys.dreamShowInfo] ?: false }
 
     suspend fun saveServer(config: ServerConfig) {
         context.dataStore.edit { p ->
@@ -79,7 +96,7 @@ class AppSettings(private val context: Context) {
             if (config.caPins.isEmpty()) {
                 p.remove(Keys.caPins)
             } else {
-                p[Keys.caPins] = pinsJson.encodeToString(config.caPins)
+                p[Keys.caPins] = dreamJson.encodeToString(config.caPins)
             }
         }
     }
@@ -104,9 +121,8 @@ class AppSettings(private val context: Context) {
         it[Keys.slideshowSeconds] = seconds.coerceIn(3, 120)
     }
 
-    suspend fun setDreamSource(id: String, name: String) = context.dataStore.edit {
-        it[Keys.dreamSourceId] = id
-        it[Keys.dreamSourceName] = name
+    suspend fun setDreamSources(sources: List<DreamSource>) = context.dataStore.edit {
+        it[Keys.dreamSources] = dreamJson.encodeToString(sources)
     }
 
     suspend fun setDreamSeconds(seconds: Int) = context.dataStore.edit {
@@ -115,5 +131,9 @@ class AppSettings(private val context: Context) {
 
     suspend fun setDreamIncludeVideos(value: Boolean) = context.dataStore.edit {
         it[Keys.dreamIncludeVideos] = value
+    }
+
+    suspend fun setDreamShowInfo(value: Boolean) = context.dataStore.edit {
+        it[Keys.dreamShowInfo] = value
     }
 }

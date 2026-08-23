@@ -486,12 +486,10 @@
   });
   $('#btnInfo').addEventListener('click', () => command('info'));
 
-  $('#btnInfo').addEventListener('click', () => command('info'));
-
-  // ---- settings (slideshow intervals, screensaver source/videos) ----
+  // ---- settings (slideshow intervals, screensaver sources/videos/info) ----
 
   const settingsSheet = $('#settingsSheet');
-  const dreamSel = $('#dreamSource');
+  const sourcesEl = $('#dreamSources');
 
   function setSettingsStatus(text, isError) {
     const el = $('#settingsStatus');
@@ -513,37 +511,67 @@
     }
   }
 
+  function collectSources() {
+    const out = [];
+    sourcesEl.querySelectorAll('input[data-kind]').forEach((cb) => {
+      if (!cb.checked) return;
+      if (cb.dataset.kind === 'album') out.push({ kind: 'album', id: cb.dataset.id, name: cb.dataset.name });
+      else out.push({ kind: cb.dataset.kind });
+    });
+    return out;
+  }
+
+  function onSourcesChange() {
+    const sources = collectSources();
+    const summary = sources.length
+      ? sources.map((s) => s.name || (s.kind === 'favorites' ? 'Favorites' : 'Timeline')).join(', ')
+      : 'timeline (default)';
+    saveSettings({ dreamSources: sources }, 'Screensaver sources: ' + summary + ' (next time it runs)');
+  }
+
+  function addSourceRow(kind, id, name, label, checked) {
+    const l = document.createElement('label');
+    l.className = 'chk src-row';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = checked;
+    cb.dataset.kind = kind;
+    if (id) cb.dataset.id = id;
+    if (name) cb.dataset.name = name;
+    cb.addEventListener('change', onSourcesChange);
+    l.appendChild(cb);
+    const span = document.createElement('span');
+    span.textContent = label;
+    l.appendChild(span);
+    sourcesEl.appendChild(l);
+  }
+
   async function openSettings() {
     settingsSheet.classList.remove('hidden');
     setSettingsStatus('');
-    dreamSel.innerHTML = '<option value="">Loading…</option>';
+    sourcesEl.innerHTML = '<p class="muted small" style="padding:0 .9rem">Loading…</p>';
     try {
       const [cfg, albums] = await Promise.all([api('/settings'), api('/albums')]);
       $('#viewerInterval').value = cfg.slideshowSeconds;
       $('#dreamInterval').value = cfg.dreamSeconds;
       $('#dreamVideos').checked = !!cfg.dreamIncludeVideos;
-      dreamSel.innerHTML = '';
-      [['', 'Timeline (newest first)'], ['favorites', 'Favorites']].forEach((pair) => {
-        const o = document.createElement('option');
-        o.value = pair[0];
-        o.textContent = pair[1];
-        dreamSel.appendChild(o);
+      $('#dreamInfo').checked = !!cfg.dreamShowInfo;
+      const selected = {};
+      (cfg.dreamSources || []).forEach((s) => {
+        selected[s.kind === 'album' ? 'album:' + s.id : s.kind] = true;
       });
+      sourcesEl.innerHTML = '';
+      addSourceRow('timeline', null, null, 'Timeline (newest first)', !!selected.timeline);
+      addSourceRow('favorites', null, null, 'Favorites', !!selected.favorites);
       if (albums.length) {
-        const g = document.createElement('optgroup');
-        g.label = 'Albums';
+        const h = document.createElement('div');
+        h.className = 'src-header';
+        h.textContent = 'Albums';
+        sourcesEl.appendChild(h);
         albums.forEach((al) => {
-          const o = document.createElement('option');
-          o.value = al.id;
-          o.textContent = al.name + ' · ' + al.count;
-          g.appendChild(o);
+          addSourceRow('album', al.id, al.name, al.name + ' · ' + al.count, !!selected['album:' + al.id]);
         });
-        dreamSel.appendChild(g);
       }
-      const current = cfg.dreamSourceId || '';
-      dreamSel.value = current;
-      // album was deleted server-side: fall back to timeline in the picker
-      if (dreamSel.value !== current) dreamSel.value = '';
     } catch (e) {
       setSettingsStatus('Could not load settings', true);
     }
@@ -570,15 +598,12 @@
     );
   });
 
-  dreamSel.addEventListener('change', () => {
-    const id = dreamSel.value;
-    let name = '';
-    if (id === 'favorites') name = 'Favorites';
-    else if (id) name = dreamSel.selectedOptions[0].textContent.replace(/ · \d+$/, '');
+  $('#dreamInfo').addEventListener('change', () => {
+    const on = $('#dreamInfo').checked;
     saveSettings(
-      { dreamSourceId: id, dreamSourceName: name },
-      name ? 'Screensaver now uses ' + name + ' (next time it runs)'
-           : 'Screensaver now uses your timeline (next time it runs)'
+      { dreamShowInfo: on },
+      on ? 'Screensaver will show photo info (next time it runs)'
+         : 'Screensaver info hidden (next time it runs)'
     );
   });
 
@@ -587,7 +612,6 @@
   settingsSheet.addEventListener('click', (e) => {
     if (e.target === settingsSheet) settingsSheet.classList.add('hidden');
   });
-
 
   function syncControls() {
     $('#btnPlay').classList.toggle('on', !!(state.tv && state.tv.slideshow));

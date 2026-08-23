@@ -132,6 +132,9 @@ class ImmichClient(
     suspend fun people(): List<PersonDto> =
         json.decodeFromString<PeopleResponseDto>(getJson("api/people")).people
 
+    suspend fun assetDetail(assetId: String): AssetDetailDto =
+        json.decodeFromString<AssetDetailDto>(getJson("api/assets/$assetId"))
+
     fun thumbnailUrl(assetId: String): String = "$serverUrl/api/assets/$assetId/thumbnail?size=preview"
     fun smallThumbUrl(assetId: String): String = "$serverUrl/api/assets/$assetId/thumbnail?size=thumbnail"
     fun originalUrl(assetId: String): String = "$serverUrl/api/assets/$assetId/original"

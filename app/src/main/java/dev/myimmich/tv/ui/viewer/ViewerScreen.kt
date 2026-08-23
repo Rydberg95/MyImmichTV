@@ -8,6 +8,8 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -47,13 +51,16 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import android.util.Log
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import dev.myimmich.tv.api.AlbumDto
+import dev.myimmich.tv.api.AssetDetailDto
 import dev.myimmich.tv.api.AssetDto
 import dev.myimmich.tv.data.AppSettings
 import dev.myimmich.tv.data.ServerConfig
@@ -67,7 +74,11 @@ import dev.myimmich.tv.tls.TlsSupport
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
+import java.time.LocalDateTime
 import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.random.Random
 
@@ -260,6 +271,21 @@ fun ViewerScreen(
     val currentAsset: AssetDto? = remoteAsset ?: assets.getOrNull(index.coerceIn(0, (assets.size - 1).coerceAtLeast(0)))
 
     LaunchedEffect(currentAsset?.id) { videoError = null }
+
+    // richer info (filename, camera, EXIF) fetched on demand for the info overlay
+    var assetDetail by remember { mutableStateOf<AssetDetailDto?>(null) }
+    val detailCache = remember { mutableMapOf<String, AssetDetailDto>() }
+    LaunchedEffect(currentAsset?.id) {
+        val a = currentAsset ?: run { assetDetail = null; return@LaunchedEffect }
+        detailCache[a.id]?.let { assetDetail = it; return@LaunchedEffect }
+        assetDetail = null
+        runCatching { client.assetDetail(a.id) }
+            .onSuccess {
+                detailCache[a.id] = it
+                if (currentAsset?.id == a.id) assetDetail = it
+            }
+            .onFailure { Log.w("ImmichTV", "asset detail failed for ${a.id}: ${it.message}") }
+    }
 
     fun moveManual(delta: Int) {
         if (assets.isEmpty()) return
@@ -518,7 +544,7 @@ fun ViewerScreen(
                         )
                     }
                 } else {
-                    FullscreenAsset(current, client, imageLoader, infoShown)
+                    FullscreenAsset(current, client, imageLoader, infoShown, assetDetail)
                 }
                 AnimatedVisibility(
                     visible = stripShown,
@@ -696,6 +722,7 @@ private fun FullscreenAsset(
     client: dev.myimmich.tv.api.ImmichClient,
     imageLoader: ImageLoader,
     infoShown: Boolean,
+    detail: AssetDetailDto? = null,
 ) {
     var portrait by remember(asset.id) { mutableStateOf(false) }
     Crossfade(targetState = asset.id, animationSpec = tween(350), label = "photo") { id ->
@@ -730,44 +757,147 @@ private fun FullscreenAsset(
             )
             AnimatedVisibility(
                 visible = infoShown,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(32.dp),
+                enter = fadeIn() + slideInVertically { it / 3 },
+                exit = fadeOut() + slideOutVertically { it / 3 },
+                modifier = Modifier.align(Alignment.BottomStart),
             ) {
-                InfoPanel(asset)
+                InfoPanel(asset, detail)
             }
         }
     }
 }
 
 @Composable
-private fun InfoPanel(asset: AssetDto) {
+private fun InfoPanel(asset: AssetDto, detail: AssetDetailDto?) {
+    val exif = detail?.exifInfo
+    val dateText = (detail?.fileCreatedAt ?: asset.fileCreatedAt)?.let { formatInfoDate(it) }
+    val place = listOfNotNull(exif?.city ?: asset.city, exif?.country ?: asset.country)
+        .joinToString(", ")
+        .takeIf { it.isNotBlank() }
+    val camera = listOfNotNull(exif?.make, exif?.model)
+        .joinToString(" ")
+        .takeIf { it.isNotBlank() }
+    // some cameras report "0.0 mm f/0.0" when the lens is unknown — hide that junk
+    val junkLens = Regex("^[\\d.\\s]+mm\\s*f/[\\d.\\s]+$")
+    val lens = exif?.lensModel?.takeIf { it.isNotBlank() && !junkLens.matches(it) }
+    val exposure = formatExposure(exif?.exposureTime)
+    val settings = listOfNotNull(
+        exif?.fNumber?.let { "f/${trimNum(it)}" },
+        exposure?.let { "$it s" },
+        exif?.iso?.let { "ISO $it" },
+        exif?.focalLength?.let { "${trimNum(it)} mm" },
+    ).joinToString("  ·  ").takeIf { it.isNotBlank() }
+    val resolution = exif?.exifImageWidth?.let { w ->
+        exif.exifImageHeight?.let { h ->
+            "${w} × $h  ·  " + trimNum(w * h / 1_000_000.0) + " MP"
+        }
+    }
+    val duration = if (asset.isVideo) detail?.duration.toJsonDouble()?.let { formatDuration((it * 1000).toLong()) }
+        ?: asset.durationMs?.let { formatDuration(it) }
+    else null
+
     Column(
         modifier = Modifier
-            .background(Color(0xB3000000))
-            .padding(16.dp),
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.45f to Color(0x66000000),
+                    1f to Color(0xE6000000),
+                )
+            )
+            .padding(horizontal = 48.dp, vertical = 20.dp),
     ) {
-        val dateText = asset.fileCreatedAt?.let {
-            runCatching {
-                OffsetDateTime.parse(it).format(DateTimeFormatter.ofPattern("EEE, d MMM yyyy  HH:mm"))
-            }.getOrNull()
+        if (duration != null) {
+            Tag("VIDEO · $duration")
         }
-        dateText?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
-        listOfNotNull(asset.city, asset.country)
-            .joinToString(", ")
-            .takeIf { it.isNotBlank() }
-            ?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB0BEC5)) }
-        if (asset.isVideo && asset.durationMs != null) {
+        if (asset.isFavorite) {
+            Tag("FAVORITE")
+        }
+        dateText?.let {
             Text(
-                formatDuration(asset.durationMs),
+                it,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                color = Color.White,
+            )
+        }
+        if (!settings.isNullOrBlank() || !resolution.isNullOrBlank()) {
+            Text(
+                listOfNotNull(settings, resolution).joinToString("\n"),
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color(0xFFCFD8DC),
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        camera?.let {
+            Text(
+                if (lens != null) "$camera  ·  $lens" else camera,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF90A4AE),
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        place?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color(0xFFB0BEC5),
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        detail?.originalFileName?.let {
+            Text(
+                it,
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF78909C),
+                modifier = Modifier.padding(top = 6.dp),
             )
         }
     }
 }
+
+@Composable
+private fun Tag(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = Color(0xFF4DD0E1),
+        modifier = Modifier
+            .padding(bottom = 6.dp)
+            .background(Color(0x334DD0E1), RoundedCornerShape(4.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    )
+}
+
+private fun trimNum(v: Double): String =
+    if (v == v.toLong().toDouble()) v.toLong().toString() else String.format("%.1f", v)
+
+/** Bucket dates may lack a timezone offset (album responses do); handle both. */
+private fun formatInfoDate(raw: String): String? = runCatching {
+    OffsetDateTime.parse(raw)
+        .format(DateTimeFormatter.ofPattern("EEEE d MMMM yyyy  ·  HH:mm"))
+}.recoverCatching {
+    LocalDateTime.parse(raw)
+        .atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("EEEE d MMMM yyyy  ·  HH:mm"))
+}.getOrNull()
+
+private fun formatExposure(el: kotlinx.serialization.json.JsonElement?): String? {
+    val prim = el as? JsonPrimitive ?: return null
+    return when {
+        prim.isString -> prim.content
+        else -> prim.doubleOrNull?.let { v ->
+            when {
+                v > 0 && v < 1 -> "1/${Math.round(1 / v)}"
+                else -> trimNum(v)
+            }
+        }
+    }
+}
+
+private fun kotlinx.serialization.json.JsonElement?.toJsonDouble(): Double? =
+    (this as? JsonPrimitive)?.doubleOrNull
 
 private fun formatDuration(ms: Long): String {
     val totalSec = ms / 1000

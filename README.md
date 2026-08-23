@@ -41,7 +41,7 @@ Everything in `tools/` is part of the repo (node deps: `cd tools && npm install`
 
 ---
 
-## Feature status (v0.5.1, 2026-08-23)
+## Feature status (v0.5.2, 2026-08-23)
 
 All items marked ✓ are **verified on the real box against the real Immich server**, usually via the pixel-analysis technique described under Testing.
 
@@ -56,10 +56,12 @@ All items marked ✓ are **verified on the real box against the real Immich serv
 - ✓ Self-signed TLS pinning: setup pins the **issuing CA** (SPKI SHA-256 + cert fingerprint) in addition to the leaf, so servers whose leaves auto-renew (the Caddy local CA here rotates leaf certs every 12 h) keep working without re-setup; hostname verification relaxed only while pinning is active
 - ✓ Certificate-change recovery: on a pin mismatch the viewer shows "Server certificate changed" and the phone SPA gets a ⚠ banner → review probed fingerprints → one-tap confirm (`/r/{token}/cert/reprobe|confirm`) updates the pins in place, keeping URL + API key
 - ✓ Daydream screensaver (`SlideshowDreamService`) — **verified on the real box** (started via BACK on the launcher; pixel-diff confirmed advancing). Note: Google TV hides 3rd-party dreams from the Screensaver picker (only Google Photos / AI art are listed) — set it once via `tools/box.sh dream` (writes the `screensaver_components` secure setting over ADB; survives reboot)
-- ✓ Screensaver source is selectable from the phone (⚙ in the SPA footer): Timeline / Favorites / any album; stored in DataStore, applied next dream start; also cycles through *all* buckets of the source instead of refetching one month forever
+- ✓ Screensaver source is selectable from the phone (⚙ in the SPA footer): **multiple sources** — Timeline / Favorites / any mix of albums (round-robin interleaved) — stored in DataStore as a JSON list, applied next dream start; migrates the old single-source setting; also cycles through *all* buckets of the source instead of refetching one month forever
 - ✓ Separate slideshow intervals: viewer (3–120 s) and screensaver (5–300 s), both set from the phone's ⚙ sheet
 - ✓ Screensaver crossfades between photos (dual blurred-backdrop + foreground ImageView layers, 900 ms), matching the viewer's crossfade
 - ✓ Screensaver can optionally include videos (plays with sound via ExoPlayer; off by default — excluded videos are skipped, not shown)
+- ✓ Screensaver info toggle: optional per-photo caption (date + place) with its own crossfade, off by default (⚙ in the SPA)
+- ✓ Rich info overlay (OK on a photo): full weekday date, place, camera + lens (junk lens strings hidden), exposure (f-stop / shutter / ISO / focal length), resolution + megapixels, filename — fetched per-asset from `GET /api/assets/{id}` and cached; tolerant date parsing (album buckets return local timestamps **without** timezone offset, timeline/search include one)
 - ✗ People browsing (endpoint exists at `/r/{token}/people`, no UI yet)
 - ✗ TV-side settings UI (slideshow interval/shuffle only changeable from the phone or defaults)
 - ✗ Video seek/scrub from the phone (Range proxy exists; no preview player in the SPA)
@@ -89,9 +91,11 @@ app/src/main/java/dev/myimmich/tv/
   MainActivity.kt            config state machine: Loading → Setup | Viewer
   MyImmichApp.kt             owns AppSettings + RemoteController; starts RemoteServer
                              at app launch (runs unconfigured for phone setup)
-  SlideshowDreamService.kt   Daydream screensaver: source (timeline/favorites/album),
+  SlideshowDreamService.kt   Daydream screensaver: multiple sources (timeline/
+                              favorites/albums, round-robin interleaved),
                               own interval, crossfade (dual ImageView layers),
-                              optional video playback via shared RotatingVideoFrame
+                              optional info caption, optional video playback
+                              via shared RotatingVideoFrame
   api/ImmichModels.kt        DTOs incl. columnar→row transpose (see API notes)
   api/ImmichClient.kt        REST client (OkHttp + kotlinx.serialization), URL builders
   api/ImmichImageFetcher.kt  Coil Fetcher for ImmichThumb(url) using the authed client
@@ -127,7 +131,7 @@ Pairing: PIN shown on TV (also in `adb logcat -s ImmichTV:D`), `POST /api/pair {
 
 Phone-driven setup (`/setup/*`, all PIN-gated): `submit {pin,url,apiKey}` → TV probes TLS → `AWAITING_CONFIRM` with fingerprint (phone displays it) → `confirm {pin}` → TV validates key against `/api/users/me`, saves, `DONE` → phone auto-pairs.
 
-Viewer endpoints under `/r/{token}/`: `GET state`, `POST command`, `buckets[?album=|favorite=true]`, `assets?bucket=…[&album=|favorite=true]`, `albums`, `search?q=…`, `people`, `thumb/{id}?size=preview|thumbnail`, `original/{id}` (Range passthrough → 206 + Content-Range), `GET|POST settings`. `GET` returns `{slideshowSeconds, dreamSeconds, dreamIncludeVideos, dreamSourceId, dreamSourceName}`; `POST` takes the same fields, all optional (null = unchanged) — `dreamSourceId`: "" = timeline, "favorites", or an album id. `state` carries `certChanged: true` when the TV's last library load hit a pin mismatch. `POST cert/reprobe` → live probe of the configured server (`{changed, fingerprint, subject, issuer, caIssuer, caFingerprint}`); `POST cert/confirm` → trusts the freshly probed chain (new leaf + CA pins), saves and rebuilds all clients without touching URL/key.
+Viewer endpoints under `/r/{token}/`: `GET state`, `POST command`, `buckets[?album=|favorite=true]`, `assets?bucket=…[&album=|favorite=true]`, `albums`, `search?q=…`, `people`, `thumb/{id}?size=preview|thumbnail`, `original/{id}` (Range passthrough → 206 + Content-Range), `GET|POST settings`. `GET`/`POST` share the shape `{slideshowSeconds, dreamSeconds, dreamIncludeVideos, dreamShowInfo, dreamSources: [{kind: timeline|favorites|album, id?, name?}]}` — `POST` fields are all optional (null/absent = unchanged) and the response echoes the full updated settings; empty `dreamSources` = timeline (legacy single-source prefs migrate automatically). `state` carries `certChanged: true` when the TV's last library load hit a pin mismatch. `POST cert/reprobe` → live probe of the configured server (`{changed, fingerprint, subject, issuer, caIssuer, caFingerprint}`); `POST cert/confirm` → trusts the freshly probed chain (new leaf + CA pins), saves and rebuilds all clients without touching URL/key.
 
 Commands: `{type: show|next|prev|slideshow|shuffle|info, assetId?, assetType?, value?, context?}` where `context = {source: timeline|favorites|album|search, albumId?, albumName?, bucket?, assets?}` — context is what makes the slideshow follow the phone's view.
 
@@ -275,6 +279,8 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 
 **Rotating Caddy certs broke everything overnight + dream crash (v0.5.1):** the morning after an overnight sleep, BACK-on-launcher produced only a black flash back to the launcher, and the viewer showed "Error: certificate pin mismatch". Diagnosis trail: `openssl s_client` showed the proxy's leaf cert had been minted at 05:58 GMT that morning and expired at 17:58 — **the Caddy local CA re-issues leaf certificates every 12 h** (intermediate every 7 days, root persists). The app pinned the leaf's SHA-256 at setup, so any pin was guaranteed to go stale within half a day. The screensaver symptom was the same root cause plus a crash: the dream's bucket fetch threw `SSLHandshakeException` inside its unprotected `Main.immediate` coroutine, killing the whole process mid-dream — confirmed via three `data_app_crash` entries in `dumpsys dropbox` (logcat had rotated). Fixes: (1) pinning is now chain-aware — setup pins the issuing CA by **SPKI SHA-256** (stable across renewals because Caddy reuses its CA keys) plus DER fingerprint of every presented cert, and `PinnedTrustManager` accepts if any cert in the presented chain matches any stored value; (2) recovery flow for genuine CA changes: viewer shows "Server certificate changed", phone SPA shows a ⚠ banner → review probed fingerprints → one-tap confirm updates pins in place (human-in-the-loop TOFU, like SSH); (3) the dream wraps its load loop in retry-with-backoff and `finish()`es cleanly instead of crashing the process. Note: README had drifted to v0.4.5 while the code shipped v0.5.0 features (multi-source interleaved dreams, per-slide info captions) — feature list now reflects reality.
 
+**Multi-source dreams + rich info overlay (v0.5.2):** screensaver sources became a *list* — the ⚙ sheet offers Timeline, Favorites and every album as checkboxes, mixed sources interleave round-robin (a `SourceFeed` per source with its own lazy month cursor; exhausted feeds drop out), and the old single-source prefs migrate on first read. The dream gained an optional per-slide caption (date + place, own crossfade, off by default). The viewer's info overlay was rebuilt: bottom gradient panel with full weekday date, exposure line (f-number / shutter as fraction / ISO / focal length), resolution + megapixels, camera + lens (Nikon's junk "0.0 mm f/0.0" unknown-lens string is filtered), and filename — from a new `GET /api/assets/{id}` detail call cached per asset. Two bugs found on the way: **album bucket timestamps have no timezone offset** (`2022-10-16T11:41:51.8`) while timeline/search include one, so `OffsetDateTime.parse` silently nulled every album date — both date formatters now fall back to `LocalDateTime` + system zone; and the SPA's `api()` helper died on the settings POST's empty 200 body ("Save failed" while the save actually worked) — `POST /settings` now echoes the full updated settings and `api()` tolerates empty bodies. Verified on the box: 3-source dream interleaving (uiautomator showed dates + places cycling through wedding/Sommar/favorites), info overlay contents dumped via uiautomator on a wedding photo, SPA settings sheet toggles saving with correct status text.
+
 ---
 
 ## Known issues & TODO (prioritized)
@@ -286,7 +292,7 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 5. **Video scrubbing from phone** — Range proxy works; SPA has no `<video>` preview.
 6. `livePhotoVideoId` is carried in models but unused.
 7. Slideshow interval is global, not per-run.
-8. Screensaver settings (source/interval/videos) apply at next dream start (no live "restart dream" from the phone).
+8. Screensaver settings (sources/interval/videos/info) apply at next dream start (no live "restart dream" from the phone).
 9. **Remote server freezes when the app is backgrounded** — Android's cached-app freezer suspends the process (no HTTP response) until the app is brought to the foreground again. Workaround: keep the app in the foreground/overview; proper fix is a foreground service.
 
 ---
@@ -304,7 +310,7 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 
 **TV remote:** ←/→ prev/next · ↓ filmstrip · ↑ source menu · OK info (photos) / play-pause (videos) · ▶/⏸ media keys slideshow on/off · BACK closes overlays.
 
-**Phone:** tabs (Timeline / Favorites / Albums / Search with debounced smart search), endless photo stream (scroll up/down through history; months load on demand), year/month rail on the right edge (drag or tap to jump, thumb size = loaded share of library, year ticks), thumbnail grid (tap = display on TV, context included), bottom bar ⏮ ▶ ⏭ 🔀 ℹ ⚙ (⚙ = slideshow intervals, screensaver source/videos).
+**Phone:** tabs (Timeline / Favorites / Albums / Search with debounced smart search), endless photo stream (scroll up/down through history; months load on demand), year/month rail on the right edge (drag or tap to jump, thumb size = loaded share of library, year ticks), thumbnail grid (tap = display on TV, context included), bottom bar ⏮ ▶ ⏭ 🔀 ℹ ⚙ (⚙ = slideshow intervals, screensaver sources/videos/info).
 
 ---
 
