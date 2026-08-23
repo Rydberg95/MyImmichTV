@@ -88,6 +88,7 @@ fun ViewerScreen(
     fun pinnedHttpClient(): okhttp3.OkHttpClient = TlsSupport.buildClient(
         certFingerprint = config.certFingerprint.takeIf { it.isNotBlank() },
         trustAny = config.trustAny,
+        extraAccepted = config.caPins,
     )
 
     val authedHttpClient = remember(config) {
@@ -125,9 +126,16 @@ fun ViewerScreen(
     var assetsByMonth by remember(source) { mutableStateOf<Map<String, List<AssetDto>>>(emptyMap()) }
     var loadingBucket by remember(source) { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var certChanged by remember { mutableStateOf(false) }
     val assets: List<AssetDto> = remember(months, assetsByMonth) {
         months.flatMap { m -> assetsByMonth[m].orEmpty() }
     }
+
+    /** True when a load failed because the server now presents an unpinned certificate. */
+    fun isPinMismatch(e: Throwable): Boolean =
+        generateSequence<Throwable>(e) { it.cause }.any {
+            it.message?.contains("pin mismatch", ignoreCase = true) == true
+        }
     var index by remember { mutableIntStateOf(0) }
     var infoShown by remember { mutableStateOf(false) }
     var stripShown by remember { mutableStateOf(false) }
@@ -152,6 +160,7 @@ fun ViewerScreen(
             }
             assetsByMonth = assetsByMonth + (bucket to list)
         } catch (e: Exception) {
+            if (isPinMismatch(e)) certChanged = true
             error = e.message ?: e.javaClass.simpleName
         } finally {
             loadingBucket = null
@@ -242,7 +251,9 @@ fun ViewerScreen(
             months = buckets.sortedByDescending { it.bucket }.map { it.bucket }
             if (months.isNotEmpty()) loadMonth(months.first())
             resolvePendingShow()
+            certChanged = false
         } catch (e: Exception) {
+            if (isPinMismatch(e)) certChanged = true
             error = e.message ?: e.javaClass.simpleName
         }
     }
@@ -347,7 +358,7 @@ fun ViewerScreen(
         remote.commands.collect { cmd -> commandHandler(cmd) }
     }
 
-    LaunchedEffect(currentAsset?.id, source, slideshowOn, shufflePref, assets.size, index, remoteAsset) {
+    LaunchedEffect(currentAsset?.id, source, slideshowOn, shufflePref, assets.size, index, remoteAsset, certChanged) {
         val a = currentAsset
         remote.publish(
             RemoteViewerState(
@@ -359,6 +370,7 @@ fun ViewerScreen(
                 assetType = a?.type,
                 slideshow = slideshowOn,
                 shuffle = shufflePref,
+                certChanged = certChanged,
                 updatedAt = System.currentTimeMillis(),
             )
         )
@@ -475,6 +487,7 @@ fun ViewerScreen(
             },
     ) {
         when {
+            certChanged && assets.isEmpty() && remoteAsset == null -> CertificateChangedMessage()
             error != null && assets.isEmpty() && remoteAsset == null -> CenteredMessage("Error: $error")
             assets.isEmpty() && remoteAsset == null -> CenteredMessage(
                 if (loadingBucket != null || months.isEmpty()) "Loading library…" else "This collection is empty"
@@ -621,6 +634,32 @@ private fun CenteredMessage(text: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(text, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+@Composable
+private fun CertificateChangedMessage() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "Server certificate changed",
+            style = MaterialTheme.typography.titleLarge,
+            color = Color(0xFFFFB74D),
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            "The certificate no longer matches the one confirmed at setup.\n" +
+                "Open the phone remote and tap the banner to confirm the new one.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(0xFF8AA0AB),
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 18.dp),
+        )
     }
 }
 

@@ -8,14 +8,19 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
+
+private val pinsJson = Json { ignoreUnknownKeys = true }
 
 data class ServerConfig(
     val serverUrl: String,
     val apiKey: String,
     val certFingerprint: String,
     val trustAny: Boolean,
+    val caPins: List<String> = emptyList(),
 )
 
 class AppSettings(private val context: Context) {
@@ -25,6 +30,7 @@ class AppSettings(private val context: Context) {
         val apiKey = stringPreferencesKey("api_key")
         val certFingerprint = stringPreferencesKey("cert_fingerprint")
         val trustAny = booleanPreferencesKey("trust_any")
+        val caPins = stringPreferencesKey("ca_pins")
         val slideshowSeconds = intPreferencesKey("slideshow_seconds")
         val slideshowShuffle = booleanPreferencesKey("slideshow_shuffle")
         val highQuality = booleanPreferencesKey("high_quality")
@@ -46,6 +52,9 @@ class AppSettings(private val context: Context) {
                 apiKey = key,
                 certFingerprint = p[Keys.certFingerprint] ?: "",
                 trustAny = p[Keys.trustAny] ?: false,
+                caPins = p[Keys.caPins]?.let { raw ->
+                    runCatching { pinsJson.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
+                } ?: emptyList(),
             )
         }
     }
@@ -67,6 +76,11 @@ class AppSettings(private val context: Context) {
             p[Keys.apiKey] = config.apiKey
             p[Keys.certFingerprint] = config.certFingerprint
             p[Keys.trustAny] = config.trustAny
+            if (config.caPins.isEmpty()) {
+                p.remove(Keys.caPins)
+            } else {
+                p[Keys.caPins] = pinsJson.encodeToString(config.caPins)
+            }
         }
     }
 
@@ -76,6 +90,7 @@ class AppSettings(private val context: Context) {
             p.remove(Keys.apiKey)
             p.remove(Keys.certFingerprint)
             p.remove(Keys.trustAny)
+            p.remove(Keys.caPins)
         }
     }
 

@@ -106,6 +106,14 @@ footer button.on { background: var(--accent); color: #06222a; }
 .cert .row button { flex: 1; padding: .6rem; border-radius: 10px; border: 1px solid #2c3a44; background: var(--panel); color: var(--text); font-size: .9rem; }
 .cert .row button.primary { background: var(--accent); color: #06222a; border: none; font-weight: 600; }
 
+.cert-banner { background: #4a2c00; color: #ffcc80; border-bottom: 1px solid #7a4a00;
+  padding: .55rem 1rem; font-size: .92rem; text-align: center; cursor: pointer; }
+
+.sheet-panel .row { display: flex; gap: .6rem; margin-top: 1rem; }
+.sheet-panel .row button { flex: 1; padding: .6rem; border-radius: 10px; border: 1px solid #2c3a44;
+  background: var(--panel2); color: var(--text); font-size: .95rem; }
+.sheet-panel .row button.primary { background: var(--accent); color: #06222a; border: none; font-weight: 600; }
+
 .sheet { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
   background: rgba(4,6,8,.72); }
 .sheet-panel { background: var(--panel); border: 1px solid #22303a; border-radius: 14px;

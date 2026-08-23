@@ -66,13 +66,14 @@ fun SetupScreen(
         manual = true
     }
 
-    fun validateAndSave(cert: TlsSupport.CertInfo?) {
+    fun validateAndSave(cert: TlsSupport.CertInfo?, caPins: List<String> = emptyList()) {
         scope.launch {
             try {
                 val client = dev.myimmich.tv.api.ImmichClient(
                     http = TlsSupport.buildClient(
                         certFingerprint = cert?.fingerprint?.takeIf { it.isNotBlank() },
                         trustAny = false,
+                        extraAccepted = caPins,
                     ),
                     serverUrl = url.trim().trimEnd('/'),
                     apiKey = apiKey.trim(),
@@ -84,6 +85,7 @@ fun SetupScreen(
                         apiKey = apiKey.trim(),
                         certFingerprint = cert?.fingerprint.orEmpty(),
                         trustAny = false,
+                        caPins = caPins,
                     )
                 )
                 onSaved()
@@ -151,7 +153,12 @@ fun SetupScreen(
                             }
                             when (result) {
                                 is TlsSupport.ProbeResult.Trusted -> validateAndSave(null)
-                                is TlsSupport.ProbeResult.Untrusted -> validateAndSave(result.cert)
+                                is TlsSupport.ProbeResult.Untrusted -> validateAndSave(
+                                    result.cert,
+                                    result.chain.drop(1)
+                                        .flatMap { listOf(it.fingerprint, it.spkiFingerprint) }
+                                        .distinct(),
+                                )
                                 is TlsSupport.ProbeResult.Error -> fail("unreachable")
                             }
                         }

@@ -48,7 +48,8 @@
     return fetch(base + path, opts).then(async (r) => {
       if (r.status === 403) { logout(); throw new Error('unauthorized'); }
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+      const text = await r.text();
+      return text ? JSON.parse(text) : null;
     });
   }
   function command(type, extra) {
@@ -485,6 +486,8 @@
   });
   $('#btnInfo').addEventListener('click', () => command('info'));
 
+  $('#btnInfo').addEventListener('click', () => command('info'));
+
   // ---- settings (slideshow intervals, screensaver source/videos) ----
 
   const settingsSheet = $('#settingsSheet');
@@ -585,6 +588,7 @@
     if (e.target === settingsSheet) settingsSheet.classList.add('hidden');
   });
 
+
   function syncControls() {
     $('#btnPlay').classList.toggle('on', !!(state.tv && state.tv.slideshow));
     $('#btnShuffle').classList.toggle('on', !!(state.tv && state.tv.shuffle));
@@ -610,6 +614,7 @@
     try {
       state.tv = await api('/state');
       $('#connState').classList.remove('off');
+      $('#certBanner').classList.toggle('hidden', state.tv.certChanged !== true);
       syncControls();
     } catch (e) {
       $('#connState').classList.add('off');
@@ -618,6 +623,65 @@
     }
   }
   setInterval(pollState, 2000);
+
+  // ---- certificate recovery ----
+
+  async function openCertSheet() {
+    $('#certStatus').textContent = 'Probing the server certificate…';
+    $('#certSheet').classList.remove('hidden');
+    try {
+      const s = await api('/cert/reprobe', { method: 'POST' });
+      renderCertCheck(s);
+    } catch (e) {
+      $('#certStatus').textContent = 'Could not probe the server: ' + e.message;
+    }
+  }
+
+  function renderCertCheck(s) {
+    if (s.error) {
+      $('#certStatus').textContent = 'Probe failed: ' + s.error;
+      return;
+    }
+    $('#certLeafFp').textContent = s.fingerprint || '?';
+    $('#certSubjectLine').textContent =
+      (s.subject ? 'subject: ' + s.subject + ' · ' : '') + (s.issuer || '');
+    if (s.caFingerprint) {
+      $('#certCaBlock').classList.remove('hidden');
+      $('#certCaLine').textContent = s.caIssuer || '';
+      $('#certCaFp').textContent = s.caFingerprint;
+    } else {
+      $('#certCaBlock').classList.add('hidden');
+    }
+    $('#certStatus').textContent = s.changed
+      ? 'This certificate is not the one the TV currently trusts.'
+      : 'This certificate already matches what the TV trusts.';
+  }
+
+  async function confirmCert() {
+    $('#certConfirm').disabled = true;
+    $('#certStatus').textContent = 'Confirming…';
+    try {
+      const r = await api('/cert/confirm', { method: 'POST' });
+      if (!r.ok) {
+        $('#certStatus').textContent = 'Failed: ' + (r.error || 'unknown error');
+        return;
+      }
+      $('#certStatus').textContent = 'Certificate updated — reconnecting to your library…';
+      setTimeout(() => {
+        $('#certSheet').classList.add('hidden');
+        loadStream();
+        pollState();
+      }, 1200);
+    } catch (e) {
+      $('#certStatus').textContent = 'Failed: ' + e.message;
+    } finally {
+      $('#certConfirm').disabled = false;
+    }
+  }
+
+  $('#certBanner').addEventListener('click', openCertSheet);
+  $('#certConfirm').addEventListener('click', confirmCert);
+  $('#certCancel').addEventListener('click', () => $('#certSheet').classList.add('hidden'));
 
   const setup = {
     pin: null,
@@ -676,6 +740,13 @@
       const s = await fetch('/setup/status').then((r) => r.json());
       if (s.phase === 'AWAITING_CONFIRM') {
         $('#setupFp').textContent = s.fingerprint;
+        if (s.caFingerprint) {
+          $('#setupCa').classList.remove('hidden');
+          $('#setupCaIssuer').textContent = s.caIssuer || '';
+          $('#setupCaFp').textContent = s.caFingerprint;
+        } else {
+          $('#setupCa').classList.add('hidden');
+        }
         $('#setupCert').classList.remove('hidden');
         setSetupStatus('Confirm the certificate fingerprint');
       } else if (s.phase === 'PROBING') {

@@ -54,6 +54,8 @@ private fun Root(flow: kotlinx.coroutines.flow.Flow<ConfigState>) {
             remote = app.remote,
             remoteServer = app.remoteServer,
         )
-        is ConfigState.Ready -> ViewerScreen(s.config, app.settings, app.remote, app.remoteServer)
+        is ConfigState.Ready -> androidx.compose.runtime.key(s.config) {
+            ViewerScreen(s.config, app.settings, app.remote, app.remoteServer)
+        }
     }
 }

@@ -28,6 +28,11 @@
   <div id="setupCert" class="cert hidden">
     <p>Self-signed certificate detected.<br>Verify this SHA-256 fingerprint:</p>
     <code id="setupFp"></code>
+    <div id="setupCa" class="hidden">
+      <p class="muted small">Signed by your server's local CA — its key stays stable, so the TV pins it and tolerates automatic certificate renewals:</p>
+      <p id="setupCaIssuer" class="muted small"></p>
+      <code id="setupCaFp"></code>
+    </div>
     <div class="row">
       <button id="setupTrust" class="primary">It matches — trust it</button>
       <button id="setupCancel">Cancel</button>
@@ -42,6 +47,7 @@
     <div class="now" id="nowPlaying"></div>
     <div class="conn" id="connState"><span class="dot"></span> TV</div>
   </header>
+  <div id="certBanner" class="cert-banner hidden">⚠ Server certificate changed — tap to review</div>
   <nav id="tabs">
     <button data-tab="timeline" class="active">Timeline</button>
     <button data-tab="favorites">Favorites</button>
@@ -87,6 +93,28 @@
     </label>
     <p id="settingsStatus" class="muted small"></p>
     <button id="settingsClose" class="primary">Done</button>
+  </div>
+</div>
+<div id="certSheet" class="sheet hidden">
+  <div class="sheet-panel">
+    <h2>Certificate changed</h2>
+    <p class="muted small">The TV no longer trusts the certificate your server presents. This is normal for servers that renew certificates automatically (e.g. Caddy issues new ones every 12 h) — the first confirm re-anchors trust on your server's signing CA, so future renewals are accepted silently.</p>
+    <div class="cert">
+      <p class="muted small">New leaf certificate</p>
+      <code id="certLeafFp"></code>
+      <p class="muted small" id="certSubjectLine"></p>
+      <div id="certCaBlock" class="hidden">
+        <p class="muted small">Issuing CA (the stable pin)</p>
+        <p class="muted small" id="certCaLine"></p>
+        <code id="certCaFp"></code>
+      </div>
+    </div>
+    <p class="muted small">Verify out-of-band if you can. Confirming updates the stored pins — URL and API key are kept.</p>
+    <p id="certStatus" class="muted small"></p>
+    <div class="row">
+      <button id="certConfirm" class="primary">Confirm new certificate</button>
+      <button id="certCancel">Cancel</button>
+    </div>
   </div>
 </div>
 <script src="/app.js"></script>

@@ -61,6 +61,9 @@ class RemoteServer(
     private var pendingUrl: String? = null
     private var pendingKey: String? = null
     private var pendingFingerprint: String? = null
+    private var pendingCaPins: List<String> = emptyList()
+    private var pendingCaIssuer: String? = null
+    private var pendingCaFingerprint: String? = null
 
     private var webAssets: Map<String, ByteArray> = emptyMap()
 
@@ -88,6 +91,7 @@ class RemoteServer(
             val http = TlsSupport.buildClient(
                 certFingerprint = config.certFingerprint.takeIf { it.isNotBlank() },
                 trustAny = config.trustAny,
+                extraAccepted = config.caPins,
             )
             proxyHttp = http
             proxyClient = ImmichClient(http, config.serverUrl, config.apiKey)
@@ -177,7 +181,7 @@ class RemoteServer(
                     call.respond(HttpStatusCode.Conflict)
                     return@post
                 }
-                validateAndSave(url, key, fp)
+                validateAndSave(url, key, fp, pendingCaPins)
                 call.respond(HttpStatusCode.Accepted)
             }
 
@@ -251,6 +255,39 @@ class RemoteServer(
                     settings.setDreamSource(dto.dreamSourceId, dto.dreamSourceName ?: "")
                 }
                 call.respond(HttpStatusCode.OK)
+            }
+            post("/r/{token}/cert/reprobe") {
+                if (!authorized(call)) return@post
+                val cfg = currentConfig ?: run {
+                    call.respond(HttpStatusCode.ServiceUnavailable); return@post
+                }
+                call.respond(certCheck(cfg))
+            }
+            post("/r/{token}/cert/confirm") {
+                if (!authorized(call)) return@post
+                val cfg = currentConfig ?: run {
+                    call.respond(HttpStatusCode.ServiceUnavailable); return@post
+                }
+                val probe = TlsSupport.probe("${cfg.serverUrl}/api/server/ping")
+                when (probe) {
+                    is TlsSupport.ProbeResult.Error ->
+                        call.respond(CertConfirmDto(ok = false, error = probe.message))
+                    else -> {
+                        // trust what the server presents right now: new leaf + its issuing CA
+                        val caPins = probe.chain.drop(1)
+                            .flatMap { listOf(it.fingerprint, it.spkiFingerprint) }
+                            .filter { it.isNotBlank() }
+                            .distinct()
+                        val updated = cfg.copy(
+                            certFingerprint = probe.cert.fingerprint,
+                            caPins = caPins,
+                        )
+                        settings.saveServer(updated)
+                        setConfig(updated)
+                        Log.d("ImmichTV", "Certificate re-confirmed: leaf ${probe.cert.fingerprint}, ${caPins.size} CA pins")
+                        call.respond(CertConfirmDto(ok = true))
+                    }
+                }
             }
             get("/r/{token}/buckets") {
                 val client = authorizedClient(call) ?: return@get
@@ -353,6 +390,9 @@ class RemoteServer(
         pendingUrl = null
         pendingKey = null
         pendingFingerprint = null
+        pendingCaPins = emptyList()
+        pendingCaIssuer = null
+        pendingCaFingerprint = null
         controller.updateSetup(SetupState())
     }
 
@@ -373,11 +413,18 @@ class RemoteServer(
             )
             val probe = TlsSupport.probe("$trimmed/api/server/ping")
             when (probe) {
-                is TlsSupport.ProbeResult.Trusted -> validateAndSave(trimmed, apiKey, null)
+                is TlsSupport.ProbeResult.Trusted -> validateAndSave(trimmed, apiKey, null, emptyList())
                 is TlsSupport.ProbeResult.Untrusted -> {
                     pendingUrl = trimmed
                     pendingKey = apiKey
                     pendingFingerprint = probe.cert.fingerprint
+                    // pin the issuing CA (DER + SPKI) so short-lived leaf rotations stay trusted
+                    pendingCaPins = probe.chain.drop(1)
+                        .flatMap { listOf(it.fingerprint, it.spkiFingerprint) }
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                    pendingCaIssuer = probe.top?.subject
+                    pendingCaFingerprint = probe.top?.spkiFingerprint
                     controller.updateSetup(
                         SetupState(
                             phase = "AWAITING_CONFIRM",
@@ -386,6 +433,8 @@ class RemoteServer(
                             fingerprint = probe.cert.fingerprint,
                             subject = probe.cert.subject,
                             issuer = probe.cert.issuer,
+                            caIssuer = pendingCaIssuer,
+                            caFingerprint = pendingCaFingerprint,
                         )
                     )
                 }
@@ -398,13 +447,13 @@ class RemoteServer(
         }
     }
 
-    private fun validateAndSave(url: String, apiKey: String, certFingerprint: String?) {
+    private fun validateAndSave(url: String, apiKey: String, certFingerprint: String?, caPins: List<String>) {
         scope.launch {
             controller.updateSetup(
                 SetupState(phase = "CONNECTING", url = url, apiKeyMasked = maskKey(apiKey))
             )
             try {
-                val http = TlsSupport.buildClient(certFingerprint, false)
+                val http = TlsSupport.buildClient(certFingerprint, false, caPins)
                 val client = ImmichClient(http, url, apiKey)
                 val user = client.me()
                 settings.saveServer(
@@ -413,6 +462,7 @@ class RemoteServer(
                         apiKey = apiKey,
                         certFingerprint = certFingerprint.orEmpty(),
                         trustAny = false,
+                        caPins = caPins,
                     )
                 )
                 setConfig(
@@ -421,6 +471,7 @@ class RemoteServer(
                         apiKey = apiKey,
                         certFingerprint = certFingerprint.orEmpty(),
                         trustAny = false,
+                        caPins = caPins,
                     )
                 )
                 controller.updateSetup(
@@ -442,6 +493,28 @@ class RemoteServer(
                     )
                 )
             }
+        }
+    }
+
+    /**
+     * Probes the configured server and reports whether its presented chain still matches
+     * the stored pins. [CertCheckDto.changed] drives the phone's recovery sheet.
+     */
+    private fun certCheck(cfg: ServerConfig): CertCheckDto {
+        val accepted = buildList {
+            if (cfg.certFingerprint.isNotBlank()) add(cfg.certFingerprint)
+            addAll(cfg.caPins)
+        }
+        return when (val probe = TlsSupport.probe("${cfg.serverUrl}/api/server/ping")) {
+            is TlsSupport.ProbeResult.Error -> CertCheckDto(changed = false, error = probe.message)
+            else -> CertCheckDto(
+                changed = !TlsSupport.chainMatches(probe, accepted),
+                fingerprint = probe.cert.fingerprint,
+                subject = probe.cert.subject,
+                issuer = probe.cert.issuer,
+                caIssuer = probe.top?.subject,
+                caFingerprint = probe.top?.spkiFingerprint,
+            )
         }
     }
 

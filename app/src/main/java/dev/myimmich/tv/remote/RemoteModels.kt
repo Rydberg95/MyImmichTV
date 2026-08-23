@@ -31,6 +31,7 @@ data class RemoteViewerState(
     val assetType: String? = null,
     val slideshow: Boolean = false,
     val shuffle: Boolean = false,
+    val certChanged: Boolean = false,
     val updatedAt: Long = 0,
 )
 
@@ -86,8 +87,30 @@ data class SetupState(
     val fingerprint: String? = null,
     val subject: String? = null,
     val issuer: String? = null,
+    val caIssuer: String? = null,
+    val caFingerprint: String? = null,
     val error: String? = null,
     val configured: Boolean = false,
+)
+
+/** Live view of the server's currently presented certificate, probed on demand. */
+@Serializable
+data class CertCheckDto(
+    /** True when the presented chain matches none of the stored pins. */
+    val changed: Boolean,
+    val fingerprint: String? = null,
+    val subject: String? = null,
+    val issuer: String? = null,
+    val caIssuer: String? = null,
+    /** SPKI SHA-256 of the issuing CA — the value that stays stable across leaf rotations. */
+    val caFingerprint: String? = null,
+    val error: String? = null,
+)
+
+@Serializable
+data class CertConfirmDto(
+    val ok: Boolean,
+    val error: String? = null,
 )
 
 @Serializable
