@@ -770,7 +770,11 @@ private fun FullscreenAsset(
 @Composable
 private fun InfoPanel(asset: AssetDto, detail: AssetDetailDto?) {
     val exif = detail?.exifInfo
-    val dateText = (detail?.fileCreatedAt ?: asset.fileCreatedAt)?.let { formatInfoDate(it) }
+    // localDateTime = wall clock in the photo's own timezone (what Immich's web UI shows);
+    // fileCreatedAt/bucket dates are UTC wall-clocks and display wrong outside UTC
+    val dateText = detail?.localDateTime?.let { dev.myimmich.tv.api.parseWallClock(it) }
+        ?.format(DateTimeFormatter.ofPattern("EEEE d MMMM yyyy  ·  HH:mm"))
+        ?: (detail?.fileCreatedAt ?: asset.fileCreatedAt)?.let { formatInfoDate(it) }
     val place = listOfNotNull(exif?.city ?: asset.city, exif?.country ?: asset.country)
         .joinToString(", ")
         .takeIf { it.isNotBlank() }

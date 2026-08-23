@@ -41,6 +41,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -184,14 +185,18 @@ class SlideshowDreamService : DreamService() {
 
         var dreamShowInfo = false
 
-        fun showInfo(asset: AssetDto) {
+        fun showInfo(asset: AssetDto, detail: dev.myimmich.tv.api.AssetDetailDto?) {
             infoView.animate().cancel()
             if (!dreamShowInfo) {
                 infoView.alpha = 0f
                 return
             }
-            val date = asset.fileCreatedAt?.let { formatDreamDate(it) }
-            val place = listOfNotNull(asset.city, asset.country)
+            // localDateTime = wall clock in the photo's own timezone; bucket dates are UTC
+            val date = detail?.localDateTime?.let { dev.myimmich.tv.api.parseWallClock(it) }
+                ?.format(DateTimeFormatter.ofPattern("EEE d MMM yyyy  ·  HH:mm"))
+                ?: asset.fileCreatedAt?.let { formatDreamDate(it) }
+            val exif = detail?.exifInfo
+            val place = listOfNotNull(exif?.city ?: asset.city, exif?.country ?: asset.country)
                 .joinToString(", ")
                 .takeIf { it.isNotBlank() }
             val text = listOfNotNull(date, place).joinToString("\n")
@@ -296,6 +301,15 @@ class SlideshowDreamService : DreamService() {
                     continue
                 }
 
+                // fetch the photo-local timestamp (and exact place) in parallel with the image
+                val detail = if (dreamShowInfo) {
+                    withContext(Dispatchers.IO) {
+                        runCatching { client.assetDetail(asset.id) }.getOrNull()
+                    }
+                } else {
+                    null
+                }
+
                 val result = imageLoader.execute(
                     ImageRequest.Builder(this@SlideshowDreamService)
                         .data(ImmichThumb(client.thumbnailUrl(asset.id)))
@@ -305,7 +319,7 @@ class SlideshowDreamService : DreamService() {
                 if (result is SuccessResult) {
                     consecutiveFailures = 0
                     crossfadeTo(result.image.toBitmap())
-                    showInfo(asset)
+                    showInfo(asset, detail)
                 } else {
                     consecutiveFailures++
                     if (consecutiveFailures >= 10) break

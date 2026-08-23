@@ -147,7 +147,16 @@ data class AssetDetailDto(
     val type: String? = null,
     val originalFileName: String? = null,
     val fileCreatedAt: String? = null,
+    /** Wall-clock time in the photo's own timezone (Immich serializes it with a fake 'Z').
+     *  fileCreatedAt/bucket dates are UTC wall-clocks — NOT for display. */
+    val localDateTime: String? = null,
     val duration: kotlinx.serialization.json.JsonElement? = null,
     val isFavorite: Boolean? = null,
     val exifInfo: ExifInfoDto? = null,
 )
+
+/** Extracts the wall-clock part of Immich timestamps ("…T16:16:42.027Z", "…+00:00", or naive). */
+internal fun parseWallClock(raw: String): java.time.LocalDateTime? {
+    val m = Regex("""^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)""").find(raw) ?: return null
+    return runCatching { java.time.LocalDateTime.parse(m.value) }.getOrNull()
+}
