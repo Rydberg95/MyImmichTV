@@ -46,6 +46,7 @@ data class RemoteAlbum(
     val id: String,
     val name: String,
     val count: Int,
+    val thumbId: String? = null,
 )
 
 @Serializable

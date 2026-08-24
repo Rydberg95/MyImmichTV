@@ -15,8 +15,8 @@ android {
         applicationId = "dev.myimmich.tv"
         minSdk = 30
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.5.3"
+        versionCode = 16
+        versionName = "0.6.0"
     }
 
     buildTypes {

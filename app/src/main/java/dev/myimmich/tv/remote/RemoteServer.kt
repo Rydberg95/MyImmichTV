@@ -331,7 +331,7 @@ class RemoteServer(
             get("/r/{token}/albums") {
                 val client = authorizedClient(call) ?: return@get
                 val albums = client.albums()
-                call.respond(albums.map { RemoteAlbum(it.id, it.albumName, it.assetCount) })
+                call.respond(albums.map { RemoteAlbum(it.id, it.albumName, it.assetCount, it.albumThumbnailAssetId) })
             }
             get("/r/{token}/search") {
                 val client = authorizedClient(call) ?: return@get

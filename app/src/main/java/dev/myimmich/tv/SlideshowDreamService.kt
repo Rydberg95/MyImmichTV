@@ -132,7 +132,7 @@ class SlideshowDreamService : DreamService() {
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
         val infoView = TextView(this).apply {
-            setTextColor(0xFFECEFF1.toInt())
+            setTextColor(0xFFF1EAE0.toInt())
             textSize = 18f
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
             setPadding(dp(40), dp(16), dp(40), dp(28))
@@ -153,7 +153,6 @@ class SlideshowDreamService : DreamService() {
         fun crossfadeTo(bitmap: android.graphics.Bitmap) {
             val next = if (frontSlot == -1) 0 else frontSlot xor 1
             val prev = frontSlot
-            val portrait = bitmap.width < bitmap.height
             val bNext = bgViews[next]
             val fNext = fgViews[next]
             fNext.animate().cancel()
@@ -162,12 +161,11 @@ class SlideshowDreamService : DreamService() {
             bNext.setImageBitmap(bitmap)
             fNext.alpha = 0f
             fNext.animate().alpha(1f).setDuration(fadeMs).start()
-            if (portrait) {
-                bNext.alpha = 0f
-                bNext.animate().alpha(1f).setDuration(fadeMs).start()
-            } else {
-                bNext.alpha = 0f
-            }
+            // backdrop always on: fills the gaps for any photo narrower than the
+            // screen (portrait or near-16:9 landscape) with a blur instead of bars;
+            // fully-covering photos just hide it
+            bNext.alpha = 0f
+            bNext.animate().alpha(1f).setDuration(fadeMs).start()
             if (prev != -1) {
                 val bPrev = bgViews[prev]
                 val fPrev = fgViews[prev]

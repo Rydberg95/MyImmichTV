@@ -2,6 +2,7 @@ package dev.myimmich.tv.ui.setup
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -30,7 +32,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -43,6 +44,7 @@ import dev.myimmich.tv.remote.RemoteController
 import dev.myimmich.tv.remote.RemoteServer
 import dev.myimmich.tv.remote.SetupState
 import dev.myimmich.tv.tls.TlsSupport
+import dev.myimmich.tv.ui.theme.Palette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -98,7 +100,7 @@ fun SetupScreen(
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0A0D10))
+            .background(Palette.Background)
             .verticalScroll(rememberScrollState())
             .padding(48.dp),
         horizontalArrangement = Arrangement.Center,
@@ -108,28 +110,35 @@ fun SetupScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("Set up from your phone", style = MaterialTheme.typography.titleLarge, color = Color(0xFF80DEEA))
+            Text("Set up from your phone", style = MaterialTheme.typography.titleLarge, color = Palette.Accent)
             Text(
                 "Scan with your phone camera",
                 style = MaterialTheme.typography.bodyLarge,
-                color = Color(0xFFB0BEC5),
+                color = Palette.Muted,
             )
-            Image(
-                bitmap = QrBitmap.generate(remoteServer.pairingUrl()).asImageBitmap(),
-                contentDescription = "Setup QR code",
-                modifier = Modifier.size(380.dp),
-            )
+            Box(
+                modifier = Modifier
+                    .background(Palette.Surface, RoundedCornerShape(20.dp))
+                    .border(1.dp, Palette.Border, RoundedCornerShape(20.dp))
+                    .padding(18.dp),
+            ) {
+                Image(
+                    bitmap = QrBitmap.generate(remoteServer.pairingUrl()).asImageBitmap(),
+                    contentDescription = "Setup QR code",
+                    modifier = Modifier.size(380.dp),
+                )
+            }
             Text(
                 remoteServer.pairingUrl(),
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
-                color = Color(0xFFECEFF1),
+                color = Palette.TextSoft,
             )
             Text(
                 "PIN " + remote.pin,
                 style = MaterialTheme.typography.titleLarge,
                 fontFamily = FontFamily.Monospace,
-                color = Color(0xFF80DEEA),
+                color = Palette.Accent,
             )
             SetupStatusLabel(setupState)
             OutlinedButton(onClick = { manual = !manual }) {
@@ -181,9 +190,9 @@ private fun SetupStatusLabel(state: SetupState) {
     }
     text?.let {
         val color = when (state.phase) {
-            "DONE" -> Color(0xFFA5D6A7)
-            "ERROR" -> Color(0xFFEF9A9A)
-            else -> Color(0xFFB0BEC5)
+            "DONE" -> Palette.Success
+            "ERROR" -> Palette.Error
+            else -> Palette.Muted
         }
         Text(it, style = MaterialTheme.typography.titleMedium, color = color)
     }
@@ -200,12 +209,13 @@ private fun ManualSetupForm(
     Column(
         modifier = Modifier
             .fillMaxWidth(0.4f)
-            .background(Color(0xFF10161C))
+            .background(Palette.Surface, RoundedCornerShape(20.dp))
+            .border(1.dp, Palette.Border, RoundedCornerShape(20.dp))
             .padding(32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Manual setup", style = MaterialTheme.typography.titleMedium)
+        Text("Manual setup", style = MaterialTheme.typography.titleMedium, color = Palette.Text)
         OutlinedTextField(
             value = url,
             onValueChange = onUrl,
@@ -227,7 +237,7 @@ private fun ManualSetupForm(
         Text(
             "Fingerprint verification happens on first connect",
             style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF78909C),
+            color = Palette.MutedDim,
         )
     }
 }

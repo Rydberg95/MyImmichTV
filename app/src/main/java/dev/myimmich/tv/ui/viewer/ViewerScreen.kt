@@ -5,9 +5,12 @@ import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -21,10 +24,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -40,10 +45,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -54,6 +61,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.util.Log
 import coil3.ImageLoader
@@ -71,6 +79,7 @@ import dev.myimmich.tv.remote.RemoteViewerState
 import dev.myimmich.tv.remote.toAssetDto
 import dev.myimmich.tv.repo.LibraryRepository
 import dev.myimmich.tv.tls.TlsSupport
+import dev.myimmich.tv.ui.theme.Palette
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -178,9 +187,37 @@ fun ViewerScreen(
         }
     }
 
+    // On menu open: fetch albums once and land the cursor on the tab of the
+    // active source (album sources also pre-select their chip in the strip).
+    var albumPositionPending by remember { mutableStateOf(false) }
     LaunchedEffect(menuShown) {
-        if (menuShown && albums.isEmpty()) {
-            albums = runCatching { repo.albums() }.getOrDefault(emptyList())
+        if (menuShown) {
+            menuRow = 0
+            if (albums.isEmpty()) {
+                albums = runCatching { repo.albums() }.getOrDefault(emptyList())
+            }
+            when (source.kind) {
+                SourceKind.TIMELINE -> menuCol = 0
+                SourceKind.FAVORITES -> menuCol = 1
+                SourceKind.ALBUM -> {
+                    if (albums.isNotEmpty()) {
+                        menuCol = 2
+                        albumCol = albums.indexOfFirst { it.id == source.albumId }.takeIf { it >= 0 } ?: albumCol
+                    } else {
+                        albumPositionPending = true
+                    }
+                }
+                SourceKind.SEARCH -> {}
+            }
+        } else {
+            albumPositionPending = false
+        }
+    }
+    LaunchedEffect(albums.size) {
+        if (albumPositionPending && albums.isNotEmpty()) {
+            albumPositionPending = false
+            menuCol = 2
+            albumCol = albums.indexOfFirst { it.id == source.albumId }.takeIf { it >= 0 } ?: albumCol
         }
     }
 
@@ -451,7 +488,7 @@ fun ViewerScreen(
                             true
                         }
                         Key.DirectionDown -> {
-                            if (menuRow == 0 && albums.isNotEmpty()) menuRow = 1 else menuShown = false
+                            if (menuRow == 0 && menuCol == 2 && albums.isNotEmpty()) menuRow = 1 else menuShown = false
                             true
                         }
                         Key.DirectionUp -> {
@@ -563,36 +600,44 @@ fun ViewerScreen(
                     Text(
                         "Loading more…",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF546E7A),
+                        color = Palette.TextSoft,
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(16.dp),
+                            .padding(16.dp)
+                            .background(Color(0x9917130E), RoundedCornerShape(50))
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
                     )
                 }
             }
         }
         AnimatedVisibility(
             visible = menuShown,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn() + slideInVertically { -it / 2 },
+            exit = fadeOut() + slideOutVertically { -it / 2 },
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             val albumListState = rememberLazyListState()
-            LaunchedEffect(menuRow, albumCol, albums.size) {
-                if (menuRow == 1 && albums.isNotEmpty()) {
+            LaunchedEffect(menuRow, albumCol, albums.size, menuCol) {
+                if (albums.isNotEmpty() && (menuRow == 1 || (menuRow == 0 && menuCol == 2))) {
                     albumListState.animateScrollToItem(albumCol.coerceIn(0, albums.size - 1))
                 }
             }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xCC000000))
-                    .padding(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color(0xEE171208),
+                            1f to Color(0x990C0A08),
+                        )
+                    )
+                    .padding(horizontal = 32.dp)
+                    .padding(top = 20.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     listOf(
                         "Timeline",
@@ -606,43 +651,29 @@ fun ViewerScreen(
                             2 -> source.kind == SourceKind.ALBUM
                             else -> false
                         }
-                        val cursor = menuRow == 0 && menuCol == col
-                        Text(
-                            item,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = when {
-                                cursor -> Color(0xFF80DEEA)
-                                selected -> Color(0xFF4DD0E1)
-                                else -> Color(0xFFB0BEC5)
-                            },
-                            modifier = Modifier
-                                .padding(horizontal = 8.dp)
-                                .then(
-                                    if (cursor || selected) Modifier.border(2.dp, Color(0xFF80DEEA)) else Modifier
-                                )
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                        MenuTab(
+                            label = item,
+                            cursor = menuRow == 0 && menuCol == col,
+                            selected = selected,
                         )
                     }
                 }
-                if (albums.isNotEmpty()) {
+                // Album strip is only shown while the Albums tab is focused
+                AnimatedVisibility(
+                    visible = menuCol == 2 && albums.isNotEmpty(),
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut(),
+                ) {
                     LazyRow(
                         state = albumListState,
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         itemsIndexed(albums, key = { _, a -> a.id }) { col, album ->
-                            val cursor = menuRow == 1 && albumCol == col
-                            Text(
-                                album.albumName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (cursor) Color(0xFF80DEEA) else Color(0xFFECEFF1),
-                                modifier = Modifier
-                                    .background(Color(0xFF263238))
-                                    .then(
-                                        if (cursor) Modifier.border(2.dp, Color(0xFF80DEEA))
-                                        else Modifier.border(1.dp, Color(0xFF546E7A))
-                                    )
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                            AlbumChip(
+                                name = album.albumName,
+                                cursor = menuRow == 1 && albumCol == col,
+                                active = source.kind == SourceKind.ALBUM && source.albumId == album.id,
                             )
                         }
                     }
@@ -659,8 +690,70 @@ private fun CenteredMessage(text: String) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(text, style = MaterialTheme.typography.titleMedium)
+        Text(text, style = MaterialTheme.typography.titleMedium, color = Palette.TextSoft)
     }
+}
+
+@Composable
+private fun MenuTab(label: String, cursor: Boolean, selected: Boolean) {
+    val scale by animateFloatAsState(if (cursor) 1.07f else 1f, label = "tabScale")
+    Text(
+        label,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = if (cursor || selected) FontWeight.SemiBold else FontWeight.Medium,
+        color = when {
+            cursor -> Palette.OnAccent
+            selected -> Palette.AccentBright
+            else -> Palette.Muted
+        },
+        modifier = Modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .background(
+                when {
+                    cursor -> Palette.Accent
+                    selected -> Palette.Accent.copy(alpha = 0.12f)
+                    else -> Palette.Surface2
+                },
+                RoundedCornerShape(50),
+            )
+            .then(
+                if (selected && !cursor) {
+                    Modifier.border(1.dp, Palette.Accent.copy(alpha = 0.5f), RoundedCornerShape(50))
+                } else Modifier
+            )
+            .padding(horizontal = 24.dp, vertical = 9.dp),
+    )
+}
+
+@Composable
+private fun AlbumChip(name: String, cursor: Boolean, active: Boolean) {
+    val scale by animateFloatAsState(if (cursor) 1.05f else 1f, label = "chipScale")
+    Text(
+        name,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = if (cursor || active) FontWeight.SemiBold else FontWeight.Normal,
+        color = when {
+            cursor -> Palette.OnAccent
+            active -> Palette.AccentBright
+            else -> Palette.TextSoft
+        },
+        modifier = Modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .background(
+                when {
+                    cursor -> Palette.Accent
+                    active -> Palette.Accent.copy(alpha = 0.14f)
+                    else -> Palette.Surface2
+                },
+                RoundedCornerShape(12.dp),
+            )
+            .then(
+                if (active && !cursor) {
+                    Modifier.border(1.dp, Palette.Accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                } else Modifier
+            )
+            .padding(horizontal = 16.dp, vertical = 9.dp),
+    )
 }
 
 @Composable
@@ -675,14 +768,14 @@ private fun CertificateChangedMessage() {
         Text(
             "Server certificate changed",
             style = MaterialTheme.typography.titleLarge,
-            color = Color(0xFFFFB74D),
+            color = Palette.Warn,
             textAlign = TextAlign.Center,
         )
         Text(
             "The certificate no longer matches the one confirmed at setup.\n" +
                 "Open the phone remote and tap the banner to confirm the new one.",
             style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF8AA0AB),
+            color = Palette.Muted,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 18.dp),
         )
@@ -702,13 +795,14 @@ private fun VideoErrorMessage(message: String) {
         Text(
             lines.first(),
             style = MaterialTheme.typography.titleMedium,
+            color = Palette.Text,
             textAlign = TextAlign.Center,
         )
         lines.drop(1).forEach { line ->
             Text(
                 line,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF8AA0AB),
+                color = Palette.Muted,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 10.dp),
             )
@@ -724,7 +818,6 @@ private fun FullscreenAsset(
     infoShown: Boolean,
     detail: AssetDetailDto? = null,
 ) {
-    var portrait by remember(asset.id) { mutableStateOf(false) }
     Crossfade(targetState = asset.id, animationSpec = tween(350), label = "photo") { id ->
         Box(Modifier.fillMaxSize()) {
             AsyncImage(
@@ -738,7 +831,7 @@ private fun FullscreenAsset(
                 modifier = Modifier
                     .fillMaxSize()
                     .then(
-                        if (portrait && android.os.Build.VERSION.SDK_INT >= 31) Modifier.blur(40.dp) else Modifier
+                        if (android.os.Build.VERSION.SDK_INT >= 31) Modifier.blur(40.dp) else Modifier
                     ),
             )
             AsyncImage(
@@ -750,10 +843,6 @@ private fun FullscreenAsset(
                 imageLoader = imageLoader,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
-                onSuccess = { result ->
-                    val img = result.result.image
-                    portrait = img.height > img.width
-                },
             )
             AnimatedVisibility(
                 visible = infoShown,
@@ -830,7 +919,7 @@ private fun InfoPanel(asset: AssetDto, detail: AssetDetailDto?) {
             Text(
                 listOfNotNull(settings, resolution).joinToString("\n"),
                 style = MaterialTheme.typography.bodyLarge,
-                color = Color(0xFFCFD8DC),
+                color = Palette.TextSoft,
                 modifier = Modifier.padding(top = 6.dp),
             )
         }
@@ -838,7 +927,7 @@ private fun InfoPanel(asset: AssetDto, detail: AssetDetailDto?) {
             Text(
                 if (lens != null) "$camera  ·  $lens" else camera,
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF90A4AE),
+                color = Palette.Muted,
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
@@ -846,7 +935,7 @@ private fun InfoPanel(asset: AssetDto, detail: AssetDetailDto?) {
             Text(
                 it,
                 style = MaterialTheme.typography.bodyLarge,
-                color = Color(0xFFB0BEC5),
+                color = Palette.TextSoft,
                 modifier = Modifier.padding(top = 6.dp),
             )
         }
@@ -854,7 +943,7 @@ private fun InfoPanel(asset: AssetDto, detail: AssetDetailDto?) {
             Text(
                 it,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF78909C),
+                color = Palette.MutedDim,
                 modifier = Modifier.padding(top = 6.dp),
             )
         }
@@ -866,10 +955,11 @@ private fun Tag(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.labelMedium,
-        color = Color(0xFF4DD0E1),
+        fontWeight = FontWeight.SemiBold,
+        color = Palette.Accent,
         modifier = Modifier
             .padding(bottom = 6.dp)
-            .background(Color(0x334DD0E1), RoundedCornerShape(4.dp))
+            .background(Palette.Accent.copy(alpha = 0.16f), RoundedCornerShape(4.dp))
             .padding(horizontal = 8.dp, vertical = 2.dp),
     )
 }
@@ -925,7 +1015,7 @@ private fun Filmstrip(
         state = listState,
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xAA000000))
+            .background(Color(0xCC0C0A08))
             .padding(vertical = 12.dp, horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -933,10 +1023,15 @@ private fun Filmstrip(
             val selected = i == selectedIndex
             Box(
                 modifier = Modifier
-                    .width(160.dp)
-                    .height(96.dp)
-                    .padding(if (selected) 0.dp else 3.dp)
-                    .background(Color.White.copy(alpha = if (selected) 1f else 0.25f)),
+                    .width(168.dp)
+                    .height(100.dp)
+                    .padding(3.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Palette.Surface)
+                    .then(
+                        if (selected) Modifier.border(2.dp, Palette.Accent, RoundedCornerShape(8.dp))
+                        else Modifier
+                    ),
             ) {
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
@@ -946,14 +1041,18 @@ private fun Filmstrip(
                     contentDescription = null,
                     imageLoader = imageLoader,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().padding(2.dp),
+                    modifier = Modifier.fillMaxSize(),
                 )
                 if (asset.isVideo) {
-                    Text(
-                        "▶",
-                        color = Color.White,
-                        modifier = Modifier.align(Alignment.Center),
-                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(32.dp)
+                            .background(Color(0x8C000000), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("▶", color = Palette.Text, fontSize = 13.sp)
+                    }
                 }
             }
         }

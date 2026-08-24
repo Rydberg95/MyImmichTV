@@ -70,6 +70,7 @@ data class AlbumDto(
     val id: String,
     val albumName: String,
     val assetCount: Int = 0,
+    val albumThumbnailAssetId: String? = null,
 )
 
 @Serializable

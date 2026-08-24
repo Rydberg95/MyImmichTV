@@ -41,6 +41,9 @@ case "${1:-}" in
     adb -s "$BOX_SERIAL" exec-out screencap -p > "${2:-shot.png}"
     echo "wrote ${2:-shot.png}"
     ;;
+  key)
+    adb -s "$BOX_SERIAL" shell input keyevent "${2:?keyevent code (19=up 20=down 21=left 22=right 23=ok 4=back)}"
+    ;;
   log)
     adb -s "$BOX_SERIAL" logcat -d -s ImmichTV:D -s ImmichTV:W | tail -n "${2:-30}"
     ;;
@@ -55,7 +58,7 @@ case "${1:-}" in
     adb devices -l
     ;;
   *)
-    echo "usage: BOX_SERIAL=ip:port TV_HOST=ip box.sh {devices|install|restart|pair|state|cmd '<json>'|shot [file]|log [n]|dream}" >&2
+    echo "usage: BOX_SERIAL=ip:port TV_HOST=ip box.sh {devices|install|restart|pair|state|cmd '<json>'|shot [file]|key <code>|log [n]|dream}" >&2
     echo ""
     echo "env: BOX_SERIAL (default $BOX_SERIAL), TV_HOST (default $TV_HOST)"
     echo "The adb port changes when the box reboots; find it under"

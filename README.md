@@ -32,6 +32,7 @@ Then to drive the TV from this machine as if it were the phone:
 TOKEN=<token-from-pair>
 tools/box.sh cmd '{"type":"next"}'
 tools/box.sh state
+tools/box.sh key 23        # d-pad: 19=up 20=down 21=left 22=right 23=OK 4=back
 tools/box.sh shot /tmp/s.png && python3 tools/analyze_screenshot.py /tmp/s.png
 ```
 
@@ -41,11 +42,13 @@ Everything in `tools/` is part of the repo (node deps: `cd tools && npm install`
 
 ---
 
-## Feature status (v0.5.3, 2026-08-23)
+## Feature status (v0.6.0, 2026-08-24)
 
 All items marked ✓ are **verified on the real box against the real Immich server**, usually via the pixel-analysis technique described under Testing.
 
-- ✓ Fullscreen borderless photo viewer, crossfade transitions, blur-fill backdrop for portrait photos
+- ✓ **Warm amber redesign (v0.6.0)** across the whole TV app *and* the phone SPA: shared design tokens (`ui/theme/Palette` on the TV, CSS variables in the SPA) — amber accent `#F5B15C` on warm near-black surfaces, pill-shaped source-menu tabs with cursor scale animation, rounded filmstrip thumbs with amber selection ring, SVG icons (replacing emoji) in the phone footer with a live play/pause toggle, album cards on the phone now show **cover thumbnails** (`albumThumbnailAssetId` proxied through `/r/{token}/albums` as `thumbId`, monogram fallback)
+- ✓ **Fixed: album strip no longer shows under every source-menu tab** — it now only appears while the Albums tab is focused (it used to render whenever the album list was cached, i.e. always after first menu use; ↓ also descended into it from any tab). The menu also opens with the cursor on the active source's tab and pre-selects the current album's chip
+- ✓ Fullscreen borderless photo viewer, crossfade transitions, blur-fill backdrop for any photo that doesn't fill the screen (portrait *and* near-fullscreen landscape — previously landscape gaps showed a sharp zoomed repeat of the image edge)
 - ✓ D-pad control: ←/→ flip, ↓ filmstrip, ↑ source menu (Timeline / Favorites / Albums / Remote), OK = info overlay
 - ✓ Video playback with sound (Media3 ExoPlayer), correct pillarbox geometry for portrait videos, OK = play/pause
 - ✓ Unsupported video formats (e.g. 4K60 H.264 High@L5.2, which the box's AVC decoder rejects) show an on-screen message with codec, profile/level and resolution instead of a black screen; slideshow skips past them
@@ -58,7 +61,7 @@ All items marked ✓ are **verified on the real box against the real Immich serv
 - ✓ Daydream screensaver (`SlideshowDreamService`) — **verified on the real box** (started via BACK on the launcher; pixel-diff confirmed advancing). Note: Google TV hides 3rd-party dreams from the Screensaver picker (only Google Photos / AI art are listed) — set it once via `tools/box.sh dream` (writes the `screensaver_components` secure setting over ADB; survives reboot)
 - ✓ Screensaver source is selectable from the phone (⚙ in the SPA footer): **multiple sources** — Timeline / Favorites / any mix of albums (round-robin interleaved) — stored in DataStore as a JSON list, applied next dream start; migrates the old single-source setting; also cycles through *all* buckets of the source instead of refetching one month forever
 - ✓ Separate slideshow intervals: viewer (3–120 s) and screensaver (5–300 s), both set from the phone's ⚙ sheet
-- ✓ Screensaver crossfades between photos (dual blurred-backdrop + foreground ImageView layers, 900 ms), matching the viewer's crossfade
+- ✓ Screensaver crossfades between photos (dual blurred-backdrop + foreground ImageView layers, 900 ms), matching the viewer's crossfade; the blurred backdrop fills the gaps for *any* photo narrower than the screen (v0.5.5 — previously landscape photos left black bars), like the viewer
 - ✓ Screensaver can optionally include videos (plays with sound via ExoPlayer; off by default — excluded videos are skipped, not shown)
 - ✓ Screensaver info toggle: optional per-photo caption (date + place) with its own crossfade, off by default (⚙ in the SPA)
 - ✓ Rich info overlay (OK on a photo): full weekday date, place, camera + lens (junk lens strings hidden), exposure (f-stop / shutter / ISO / focal length), resolution + megapixels, filename — fetched per-asset from `GET /api/assets/{id}` and cached
@@ -108,7 +111,7 @@ app/src/main/java/dev/myimmich/tv/
   remote/QrBitmap.kt         ZXing QR → Bitmap
   repo/LibraryRepository.kt  buckets/assets per source (timeline/favorites/album)
   ui/setup/SetupScreen.kt    QR-first setup, manual d-pad entry as fallback
-  ui/viewer/ViewerScreen.kt  the whole TV UX (~600 lines; see below)
+  ui/viewer/ViewerScreen.kt  the whole TV UX (~1000 lines; see below)
   ui/viewer/VideoPlayer.kt   RotatingVideoFrame: TextureView with manual aspect+rotation
   ui/pairing/PairingScreen.kt QR + PIN overlay (menu → Remote)
   ui/theme/Theme.kt
@@ -284,6 +287,8 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 
 **Displayed times were wrong by the location's offset (v0.5.3):** every timestamp we displayed — viewer overlay and dream captions — was a UTC wall-clock. Immich's `fileCreatedAt` and bucket dates are UTC (bucket responses even drop the `Z`), while the photo's actual local time lives in the asset detail's `localDateTime` (e.g. `IMG_20260822_161642.jpg` = `fileCreatedAt 14:16Z` but `localDateTime 16:16`, `exifInfo.timeZone Europe/Stockholm`; the wedding-trip photos are `UTC+1` abroad). Cross-checked by pulling the API key from the box's DataStore via `run-as` and probing Immich directly (note: the preferences protobuf nests values — field 2 → field 5 — so naive `strings` extraction grabs framing bytes). Fix: displays prefer `detail.localDateTime` (parsed as wall clock, the trailing `Z` is fake — Immich's web UI does the same), falling back to the old tolerant parsing when the detail call fails. The dream now fetches the detail per slide — in parallel with the image, only when the info caption is enabled — and also takes city/country from it. Verified on the box: viewer overlay on `MDD_7081_edit.jpg` shows 12:41 (was 11:41), dream captions show Slite 14:36 / Lund 14:28 (Sweden DST, +2) and wedding-trip 06:43 (+1).
 
+**Warm amber redesign + album-strip bug (v0.6.0):** the UI had accreted ~45 hardcoded cyan/gray hexes across four Compose files plus a parallel set of CSS variables; the refresh centralized them into `ui/theme/Palette` (single source of truth, mirrored by the SPA's `:root` variables) and switched the identity to warm amber on warm near-black — deliberately *not* the old cyan, per design decision. The cert-warning color moved to a more orange-red shade so it can't be mistaken for the accent. The **album-strip bug** was a one-line visibility condition: the menu rendered the `LazyRow` whenever `albums.isNotEmpty()` — and since albums are fetched on first menu open, the strip appeared under Timeline/Favorites/Remote forever after. Fixed by gating it on the Albums tab being focused (with `expandVertically` animation), gating the ↓ key the same way, and — new behavior — opening the menu with the cursor on the active source's tab (album sources also pre-select their chip; the async albums fetch is handled by a pending flag since the fetch may still be in flight when the menu opens). Phone album covers ride on Immich's own `albumThumbnailAssetId` field (present in v3.1's `/api/albums` response — verified live; no extra bucket probing needed), proxied as `thumbId` and rendered as lazy-loaded cover cards with a monogram fallback for coverless albums. Footer emoji buttons became inline SVGs with a play/pause pair toggled from the polled state. Verified on the box: uiautomator dumps show the menu on Timeline/Favorites = 4 tabs only, Albums tab = tabs + chips; ↓+OK album selection works; menu reopens on the Albums tab with the active chip highlighted (4.7k amber pixels in the menu band); `album_sim.js` shows 42 cover cards (20 loaded in-view, 0 broken), SVG footer, and tap-through into an album stream. One transient HTTP 500 on `/buckets` was observed during a sim run and did not reproduce — upstream hiccup, not a code path touched by this change.
+
 ---
 
 ## Known issues & TODO (prioritized)
@@ -320,8 +325,9 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 ## Repository layout & tooling
 
 - Remote: `https://gitea.rydberg.lan/elias/MyImmichTV.git` (self-hosted Gitea) — `origin`, branch `master`; push when publishing work, keep the feature-status version above in sync with `app/build.gradle.kts`
-- `tools/box.sh` — box deploy/PIN/pair/state/cmd/screenshot/log/dream helpers (`BOX_SERIAL`, `TV_HOST` env overrides)
+- `tools/box.sh` — box deploy/PIN/pair/state/cmd/screenshot/keyevent/log/dream helpers (`BOX_SERIAL`, `TV_HOST` env overrides)
 - `tools/phone_sim.js` — headless-Chromium phone simulation (pair via hash pin, report grid/console/network)
+- `tools/album_sim.js` — same harness for the Albums tab: cover cards, footer SVGs, tap-through into an album stream
 - `tools/analyze_screenshot.py` — screencap ASCII art / content extent / frame diff
 - `tools/package.json` — puppeteer-core 25.8.0 pinned; `cd tools && npm install`
 - `tools/node_modules/` is git-ignored

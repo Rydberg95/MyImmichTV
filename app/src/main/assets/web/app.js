@@ -258,7 +258,7 @@
     if (a.type === 'VIDEO') {
       const v = document.createElement('span');
       v.className = 'vid';
-      v.textContent = '▶';
+      v.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
       cell.appendChild(v);
     }
     cell.addEventListener('click', () => {
@@ -304,12 +304,30 @@
       albums.forEach((al) => {
         const d = document.createElement('div');
         d.className = 'album';
+        d.dataset.initial = (al.name || '?').trim().charAt(0).toUpperCase() || '?';
+        if (al.thumbId) {
+          const img = document.createElement('img');
+          img.className = 'album-cover';
+          img.loading = 'lazy';
+          img.alt = '';
+          img.src = imgSrc(al.thumbId, 'thumbnail');
+          img.addEventListener('error', () => {
+            img.remove();
+            d.classList.add('noimg');
+          });
+          d.appendChild(img);
+        } else {
+          d.classList.add('noimg');
+        }
+        const meta = document.createElement('div');
+        meta.className = 'album-meta';
         const h = document.createElement('h3');
         h.textContent = al.name;
         const p = document.createElement('p');
-        p.textContent = al.count + ' items';
-        d.appendChild(h);
-        d.appendChild(p);
+        p.textContent = al.count + (al.count === 1 ? ' item' : ' items');
+        meta.appendChild(h);
+        meta.appendChild(p);
+        d.appendChild(meta);
         d.addEventListener('click', () => {
           state.albumId = al.id;
           state.albumName = al.name;
@@ -614,7 +632,10 @@
   });
 
   function syncControls() {
-    $('#btnPlay').classList.toggle('on', !!(state.tv && state.tv.slideshow));
+    const playing = !!(state.tv && state.tv.slideshow);
+    $('#btnPlay').classList.toggle('on', playing);
+    $('#btnPlay .ic-play').classList.toggle('hidden', playing);
+    $('#btnPlay .ic-pause').classList.toggle('hidden', !playing);
     $('#btnShuffle').classList.toggle('on', !!(state.tv && state.tv.shuffle));
     document.querySelectorAll('.cell.current').forEach((c) => c.classList.remove('current'));
     if (state.tv && state.tv.assetId) {
