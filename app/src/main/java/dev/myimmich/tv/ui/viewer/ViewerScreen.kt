@@ -5,6 +5,7 @@ import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -68,6 +69,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import android.util.Log
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
@@ -1088,7 +1090,9 @@ private fun formatDuration(ms: Long): String {
     return "%d:%02d".format(m, s)
 }
 
-/** Borderless edge-to-edge mosaic of square thumbnails; `index` is the d-pad cursor. */
+/** Borderless edge-to-edge mosaic of square thumbnails; `index` is the d-pad cursor.
+ *  The selected photo pops out of the mosaic: it scales up over its neighbors,
+ *  rounds its corners and casts a soft shadow (replacing the old flat border). */
 @Composable
 private fun PhotoGrid(
     assets: List<AssetDto>,
@@ -1105,10 +1109,31 @@ private fun PhotoGrid(
     ) {
         items(assets.size, key = { assets[it].id }) { i ->
             val asset = assets[i]
+            val selected = i == selectedIndex
+            val scale by animateFloatAsState(
+                if (selected) 1.15f else 1f,
+                tween(180), label = "popScale",
+            )
+            val corner by animateDpAsState(
+                if (selected) 14.dp else 0.dp,
+                tween(180), label = "popCorner",
+            )
+            val elevation by animateDpAsState(
+                if (selected) 20.dp else 0.dp,
+                tween(180), label = "popElevation",
+            )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f),
+                    .aspectRatio(1f)
+                    .zIndex(if (selected) 1f else 0f)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        shape = RoundedCornerShape(corner)
+                        clip = true
+                        shadowElevation = elevation.toPx()
+                    },
             ) {
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
@@ -1130,13 +1155,6 @@ private fun PhotoGrid(
                     ) {
                         Text("▶", color = Palette.Text, fontSize = 12.sp)
                     }
-                }
-                if (i == selectedIndex) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .border(3.dp, Palette.Accent),
-                    )
                 }
             }
         }
