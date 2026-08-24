@@ -5,7 +5,6 @@ import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -17,6 +16,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -64,6 +64,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -259,6 +260,20 @@ fun ViewerScreen(
                     ImageRequest.Builder(context)
                         .data(dev.myimmich.tv.api.ImmichThumb(client.thumbnailUrl(assets[i].id)))
                         .memoryCacheKey("preview-" + assets[i].id)
+                        .build()
+                )
+            }
+        }
+        // Preload the grid thumbnails for the next few rows so scrolling down
+        // doesn't wait on the network (Coil memory cache makes them instant).
+        if (gridShown) {
+            val start = pos + 1
+            val end = (pos + gridColumns * 4).coerceAtMost(assets.size)
+            for (i in start until end) {
+                imageLoader.enqueue(
+                    ImageRequest.Builder(context)
+                        .data(dev.myimmich.tv.api.ImmichThumb(client.smallThumbUrl(assets[i].id)))
+                        .memoryCacheKey("thumb-" + assets[i].id)
                         .build()
                 )
             }
@@ -640,9 +655,37 @@ fun ViewerScreen(
                         imageLoader = imageLoader,
                         state = gridState,
                     )
+                    // Smooth scroll: compute the exact pixel delta from the grid's
+                    // actual scroll position (not a stale prevIndex) so rapid key
+                    // presses that cancel a mid-flight animation still scroll by
+                    // exactly the right amount.
                     LaunchedEffect(safeIndex, gridColumns) {
-                        if (gridState.layoutInfo.visibleItemsInfo.none { it.index == safeIndex }) {
-                            gridState.scrollToItem(safeIndex)
+                        val info = gridState.layoutInfo
+                        val cellHeight = info.visibleItemsInfo.firstOrNull()?.size?.height
+                            ?: return@LaunchedEffect
+                        val viewportH = info.viewportEndOffset - info.viewportStartOffset
+                        val scrollPx = (gridState.firstVisibleItemIndex / gridColumns) * cellHeight +
+                            gridState.firstVisibleItemScrollOffset
+                        val cursorTop = (safeIndex / gridColumns) * cellHeight
+                        val cursorBottom = cursorTop + cellHeight
+                        val delta = when {
+                            cursorBottom > scrollPx + viewportH ->
+                                cursorBottom - (scrollPx + viewportH)
+                            cursorTop < scrollPx ->
+                                cursorTop - scrollPx
+                            else -> 0
+                        }
+                        if (delta != 0) {
+                            if (kotlin.math.abs(delta) > cellHeight * 4) {
+                                gridState.scrollToItem(safeIndex)
+                            } else {
+                                // Instant scroll (not animated): the Amlogic S905X5M's
+                                // CPU can't keep up with Compose's per-frame layout during
+                                // animateScrollBy — the UI thread hits ~150ms/frame.
+                                // Instant scrollBy is jank-free; the pop-out on the new
+                                // cell provides the visual feedback instead.
+                                gridState.scrollBy(delta.toFloat())
+                            }
                         }
                     }
                 } else {
@@ -1091,8 +1134,12 @@ private fun formatDuration(ms: Long): String {
 }
 
 /** Borderless edge-to-edge mosaic of square thumbnails; `index` is the d-pad cursor.
- *  The selected photo pops out of the mosaic: it scales up over its neighbors,
- *  rounds its corners and casts a soft shadow (replacing the old flat border). */
+ *  The selected photo pops out: scale + rounded corners + soft shadow. Only the
+ *  selected cell gets a graphicsLayer — unselected cells are plain images so the
+ *  GPU composites one big surface instead of ~28 separate layers during scroll.
+ *  ImageRequests are remembered per-cell to avoid Builder allocation during scroll. */
+private val GridSelectedShape = RoundedCornerShape(14.dp)
+
 @Composable
 private fun PhotoGrid(
     assets: List<AssetDto>,
@@ -1102,6 +1149,8 @@ private fun PhotoGrid(
     imageLoader: ImageLoader,
     state: LazyGridState,
 ) {
+    val ctx = LocalContext.current
+    val shadowPx = with(LocalDensity.current) { 12.dp.toPx() }
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
         state = state,
@@ -1110,36 +1159,37 @@ private fun PhotoGrid(
         items(assets.size, key = { assets[it].id }) { i ->
             val asset = assets[i]
             val selected = i == selectedIndex
-            val scale by animateFloatAsState(
-                if (selected) 1.15f else 1f,
-                tween(180), label = "popScale",
-            )
-            val corner by animateDpAsState(
-                if (selected) 14.dp else 0.dp,
-                tween(180), label = "popCorner",
-            )
-            val elevation by animateDpAsState(
-                if (selected) 20.dp else 0.dp,
-                tween(180), label = "popElevation",
-            )
+            // Build the ImageRequest once per cell; remember keyed on asset.id
+            // avoids rebuilding it on every recomposition (e.g. when selectedIndex
+            // changes and all visible cells recompose).
+            val request = remember(asset.id) {
+                ImageRequest.Builder(ctx)
+                    .data(dev.myimmich.tv.api.ImmichThumb(client.smallThumbUrl(asset.id)))
+                    .memoryCacheKey("thumb-${asset.id}")
+                    .build()
+            }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .zIndex(if (selected) 1f else 0f)
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        shape = RoundedCornerShape(corner)
-                        clip = true
-                        shadowElevation = elevation.toPx()
-                    },
+                    .then(
+                        if (selected) {
+                            Modifier
+                                .zIndex(1f)
+                                .graphicsLayer(
+                                    scaleX = 1.15f,
+                                    scaleY = 1.15f,
+                                    shape = GridSelectedShape,
+                                    clip = true,
+                                    shadowElevation = shadowPx,
+                                )
+                        } else {
+                            Modifier
+                        }
+                    ),
             ) {
                 AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(dev.myimmich.tv.api.ImmichThumb(client.smallThumbUrl(asset.id)))
-                        .memoryCacheKey("thumb-${asset.id}")
-                        .build(),
+                    model = request,
                     contentDescription = null,
                     imageLoader = imageLoader,
                     contentScale = ContentScale.Crop,
