@@ -234,6 +234,7 @@ class RemoteServer(
                         dreamSeconds = settings.dreamSeconds.first(),
                         dreamIncludeVideos = settings.dreamIncludeVideos.first(),
                         dreamShowInfo = settings.dreamShowInfo.first(),
+                        gridColumns = settings.gridColumns.first(),
                         dreamSources = settings.dreamSources.first(),
                     )
                 )
@@ -252,6 +253,7 @@ class RemoteServer(
                 if (dto.dreamSeconds != null) settings.setDreamSeconds(dto.dreamSeconds)
                 if (dto.dreamIncludeVideos != null) settings.setDreamIncludeVideos(dto.dreamIncludeVideos)
                 if (dto.dreamShowInfo != null) settings.setDreamShowInfo(dto.dreamShowInfo)
+                if (dto.gridColumns != null) settings.setGridColumns(dto.gridColumns)
                 if (dto.dreamSources != null) settings.setDreamSources(dto.dreamSources)
                 call.respond(
                     SettingsDto(
@@ -259,6 +261,7 @@ class RemoteServer(
                         dreamSeconds = settings.dreamSeconds.first(),
                         dreamIncludeVideos = settings.dreamIncludeVideos.first(),
                         dreamShowInfo = settings.dreamShowInfo.first(),
+                        gridColumns = settings.gridColumns.first(),
                         dreamSources = settings.dreamSources.first(),
                     )
                 )

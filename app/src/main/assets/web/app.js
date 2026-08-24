@@ -571,6 +571,7 @@
     try {
       const [cfg, albums] = await Promise.all([api('/settings'), api('/albums')]);
       $('#viewerInterval').value = cfg.slideshowSeconds;
+      $('#gridColumns').value = cfg.gridColumns || 7;
       $('#dreamInterval').value = cfg.dreamSeconds;
       $('#dreamVideos').checked = !!cfg.dreamIncludeVideos;
       $('#dreamInfo').checked = !!cfg.dreamShowInfo;
@@ -599,6 +600,12 @@
     const v = parseInt($('#viewerInterval').value, 10);
     if (!(v >= 3 && v <= 120)) { setSettingsStatus('Viewing interval must be 3–120 s', true); return; }
     saveSettings({ slideshowSeconds: v }, 'Viewing slideshow: ' + v + ' s per photo');
+  });
+
+  $('#gridColumns').addEventListener('change', () => {
+    const v = parseInt($('#gridColumns').value, 10);
+    if (!(v >= 3 && v <= 12)) { setSettingsStatus('Grid columns must be 3–12', true); return; }
+    saveSettings({ gridColumns: v }, 'TV photo grid: ' + v + ' columns wide');
   });
 
   $('#dreamInterval').addEventListener('change', () => {

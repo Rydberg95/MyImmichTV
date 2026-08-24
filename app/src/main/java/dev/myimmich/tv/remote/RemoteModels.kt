@@ -138,6 +138,7 @@ data class SettingsDto(
     val dreamSeconds: Int,
     val dreamIncludeVideos: Boolean,
     val dreamShowInfo: Boolean,
+    val gridColumns: Int,
     val dreamSources: List<dev.myimmich.tv.data.DreamSource>,
 )
 
@@ -148,5 +149,6 @@ data class SettingsUpdateDto(
     val dreamSeconds: Int? = null,
     val dreamIncludeVideos: Boolean? = null,
     val dreamShowInfo: Boolean? = null,
+    val gridColumns: Int? = null,
     val dreamSources: List<dev.myimmich.tv.data.DreamSource>? = null,
 )

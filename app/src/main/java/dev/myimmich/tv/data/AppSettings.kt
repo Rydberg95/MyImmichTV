@@ -42,6 +42,7 @@ class AppSettings(private val context: Context) {
         val dreamSeconds = intPreferencesKey("dream_seconds")
         val dreamIncludeVideos = booleanPreferencesKey("dream_include_videos")
         val dreamShowInfo = booleanPreferencesKey("dream_show_info")
+        val gridColumns = intPreferencesKey("grid_columns")
     }
 
     val serverConfig: Flow<ServerConfig?> = context.dataStore.data.map { p ->
@@ -86,6 +87,9 @@ class AppSettings(private val context: Context) {
     val dreamSeconds: Flow<Int> = context.dataStore.data.map { it[Keys.dreamSeconds] ?: 10 }
     val dreamIncludeVideos: Flow<Boolean> = context.dataStore.data.map { it[Keys.dreamIncludeVideos] ?: false }
     val dreamShowInfo: Flow<Boolean> = context.dataStore.data.map { it[Keys.dreamShowInfo] ?: false }
+
+    /** TV browse-grid columns (the borderless mosaic shown for each source). */
+    val gridColumns: Flow<Int> = context.dataStore.data.map { (it[Keys.gridColumns] ?: 7).coerceIn(3, 12) }
 
     suspend fun saveServer(config: ServerConfig) {
         context.dataStore.edit { p ->
@@ -135,5 +139,9 @@ class AppSettings(private val context: Context) {
 
     suspend fun setDreamShowInfo(value: Boolean) = context.dataStore.edit {
         it[Keys.dreamShowInfo] = value
+    }
+
+    suspend fun setGridColumns(value: Int) = context.dataStore.edit {
+        it[Keys.gridColumns] = value.coerceIn(3, 12)
     }
 }

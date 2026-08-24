@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,6 +30,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -138,6 +143,7 @@ fun ViewerScreen(
 
     val intervalSec by settings.slideshowSeconds.collectAsStateWithLifecycle(initialValue = 10)
     val shufflePref by settings.slideshowShuffle.collectAsStateWithLifecycle(initialValue = false)
+    val gridColumns by settings.gridColumns.collectAsStateWithLifecycle(initialValue = 7)
 
     var pairingShown by remember { mutableStateOf(false) }
 
@@ -167,6 +173,11 @@ fun ViewerScreen(
     var slideshowOn by remember { mutableStateOf(false) }
     var videoToggleTick by remember { mutableIntStateOf(0) }
     var videoError by remember { mutableStateOf<String?>(null) }
+
+    /** Grid browse mode: the borderless photo mosaic (landing view for each source).
+     *  False = the classic fullscreen viewer. `index` is the cursor in both modes. */
+    var gridShown by remember { mutableStateOf(true) }
+    val gridState = rememberLazyGridState()
 
     suspend fun loadMonth(bucket: String) {
         if (assetsByMonth.containsKey(bucket)) return
@@ -231,11 +242,12 @@ fun ViewerScreen(
         }
     }
 
-    LaunchedEffect(index, assets.size, months.size, source) {
+    LaunchedEffect(index, assets.size, months.size, source, gridShown, gridColumns) {
         if (months.isEmpty()) return@LaunchedEffect
         val pos = index.coerceIn(0, (assets.size - 1).coerceAtLeast(0))
         val unloaded = months.filter { !assetsByMonth.containsKey(it) }
-        if (assets.isNotEmpty() && unloaded.isNotEmpty() && pos >= assets.size - 12) {
+        val lookahead = if (gridShown) gridColumns * 4 else 12
+        if (assets.isNotEmpty() && unloaded.isNotEmpty() && pos >= assets.size - lookahead) {
             loadMonth(unloaded.first())
         }
         for (offset in intArrayOf(-2, -1, 1, 2)) {
@@ -312,7 +324,8 @@ fun ViewerScreen(
     // richer info (filename, camera, EXIF) fetched on demand for the info overlay
     var assetDetail by remember { mutableStateOf<AssetDetailDto?>(null) }
     val detailCache = remember { mutableMapOf<String, AssetDetailDto>() }
-    LaunchedEffect(currentAsset?.id) {
+    LaunchedEffect(currentAsset?.id, gridShown) {
+        if (gridShown) return@LaunchedEffect   // detail is only for the fullscreen info overlay
         val a = currentAsset ?: run { assetDetail = null; return@LaunchedEffect }
         detailCache[a.id]?.let { assetDetail = it; return@LaunchedEffect }
         assetDetail = null
@@ -324,10 +337,19 @@ fun ViewerScreen(
             .onFailure { Log.w("ImmichTV", "asset detail failed for ${a.id}: ${it.message}") }
     }
 
+    fun showGrid() {
+        gridShown = true
+        remoteAsset = null
+        slideshowOn = false
+        stripShown = false
+        infoShown = false
+    }
+
     fun moveManual(delta: Int) {
         if (assets.isEmpty()) return
         slideshowOn = false
         remoteAsset = null
+        gridShown = false
         index = (index + delta).coerceIn(0, assets.size - 1)
     }
 
@@ -351,6 +373,7 @@ fun ViewerScreen(
                     val id = cmd.assetId
                     if (id != null) {
                         videoError = null
+                        gridShown = false   // phone-driven viewing is fullscreen
                         val ctx = cmd.context
                         fun jumpWithin(bucket: String?) {
                             val pos = liveAssets().indexOfFirst { it.id == id }
@@ -411,9 +434,15 @@ fun ViewerScreen(
                 }
                 "next" -> { moveManual(1) }
                 "prev" -> { moveManual(-1) }
-                "slideshow" -> { slideshowOn = cmd.value == 1 }
+                "slideshow" -> {
+                    slideshowOn = cmd.value == 1
+                    if (cmd.value == 1) gridShown = false
+                }
                 "shuffle" -> { scope.launch { settings.setSlideshow(intervalSec, cmd.value == 1) } }
-                "info" -> { infoShown = !infoShown }
+                "info" -> {
+                    if (gridShown) gridShown = false
+                    infoShown = !infoShown
+                }
             }
         }
     )
@@ -439,8 +468,8 @@ fun ViewerScreen(
         )
     }
 
-    LaunchedEffect(slideshowOn, index, assets.size, intervalSec, shufflePref) {
-        if (!slideshowOn || assets.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(slideshowOn, index, assets.size, intervalSec, shufflePref, gridShown) {
+        if (!slideshowOn || gridShown || assets.isEmpty()) return@LaunchedEffect
         val a = currentAsset ?: return@LaunchedEffect
         if (!a.isVideo) {
             delay(intervalSec * 1000L)
@@ -451,11 +480,12 @@ fun ViewerScreen(
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    BackHandler(enabled = menuShown || stripShown || infoShown) {
+    BackHandler(enabled = menuShown || stripShown || infoShown || !gridShown) {
         when {
             menuShown -> menuShown = false
             stripShown -> stripShown = false
             infoShown -> infoShown = false
+            else -> showGrid()   // fullscreen viewer → back to the grid
         }
     }
 
@@ -501,11 +531,13 @@ fun ViewerScreen(
                                     0 -> {
                                         source = LibrarySource(SourceKind.TIMELINE, "Timeline")
                                         index = 0
+                                        gridShown = true
                                         menuShown = false
                                     }
                                     1 -> {
                                         source = LibrarySource(SourceKind.FAVORITES, "Favorites")
                                         index = 0
+                                        gridShown = true
                                         menuShown = false
                                     }
                                     2 -> {
@@ -524,12 +556,52 @@ fun ViewerScreen(
                                 if (album != null) {
                                     source = LibrarySource(SourceKind.ALBUM, album.albumName, album.id)
                                     index = 0
+                                    gridShown = true
                                     menuShown = false
                                     menuRow = 0
                                 }
                             }
                             true
                         }
+                        else -> false
+                    }
+                } else if (gridShown) {
+                    when (e.key) {
+                        Key.DirectionLeft -> {
+                            if (assets.isNotEmpty()) index = (index - 1).coerceIn(0, assets.size - 1)
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            if (assets.isNotEmpty()) index = (index + 1).coerceIn(0, assets.size - 1)
+                            true
+                        }
+                        Key.DirectionUp -> {
+                            if (index >= gridColumns) index -= gridColumns else menuShown = true
+                            true
+                        }
+                        Key.DirectionDown -> {
+                            if (assets.isNotEmpty()) {
+                                index =
+                                    if (index + gridColumns < assets.size) index + gridColumns else assets.size - 1
+                            }
+                            true
+                        }
+                        Key.DirectionCenter, Key.Enter, Key.Spacebar -> {
+                            if (assets.isNotEmpty()) {
+                                remoteAsset = null
+                                gridShown = false
+                            }
+                            true
+                        }
+                        Key.MediaPlayPause, Key.MediaPlay -> {
+                            if (assets.isNotEmpty()) {
+                                remoteAsset = null
+                                gridShown = false
+                                slideshowOn = true
+                            }
+                            true
+                        }
+                        Key.MediaPause -> { slideshowOn = false; true }
                         else -> false
                     }
                 } else when (e.key) {
@@ -557,44 +629,60 @@ fun ViewerScreen(
             )
             else -> {
                 val safeIndex = if (assets.isEmpty()) 0 else index.coerceIn(0, assets.size - 1)
-                val current = currentAsset ?: assets[safeIndex]
-                if (current.isVideo) {
-                    val errorMessage = videoError
-                    if (errorMessage != null) {
-                        VideoErrorMessage(errorMessage)
-                    } else {
-                        VideoPlayer(
-                            url = client.originalUrl(current.id),
-                            httpClient = authedHttpClient,
-                            modifier = Modifier.fillMaxSize(),
-                            toggleTick = videoToggleTick,
-                            onEnded = { if (slideshowOn) advanceSlideshow() },
-                            onError = { message ->
-                                videoError = message
-                                if (slideshowOn) {
-                                    scope.launch {
-                                        delay(4000)
-                                        if (videoError == message) advanceSlideshow()
-                                    }
-                                }
-                            },
-                        )
-                    }
-                } else {
-                    FullscreenAsset(current, client, imageLoader, infoShown, assetDetail)
-                }
-                AnimatedVisibility(
-                    visible = stripShown,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                ) {
-                    Filmstrip(
+                if (gridShown) {
+                    PhotoGrid(
                         assets = assets,
                         selectedIndex = safeIndex,
+                        columns = gridColumns,
                         client = client,
                         imageLoader = imageLoader,
+                        state = gridState,
                     )
+                    LaunchedEffect(safeIndex, gridColumns) {
+                        if (gridState.layoutInfo.visibleItemsInfo.none { it.index == safeIndex }) {
+                            gridState.scrollToItem(safeIndex)
+                        }
+                    }
+                } else {
+                    val current = currentAsset ?: assets[safeIndex]
+                    if (current.isVideo) {
+                        val errorMessage = videoError
+                        if (errorMessage != null) {
+                            VideoErrorMessage(errorMessage)
+                        } else {
+                            VideoPlayer(
+                                url = client.originalUrl(current.id),
+                                httpClient = authedHttpClient,
+                                modifier = Modifier.fillMaxSize(),
+                                toggleTick = videoToggleTick,
+                                onEnded = { if (slideshowOn) advanceSlideshow() },
+                                onError = { message ->
+                                    videoError = message
+                                    if (slideshowOn) {
+                                        scope.launch {
+                                            delay(4000)
+                                            if (videoError == message) advanceSlideshow()
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    } else {
+                        FullscreenAsset(current, client, imageLoader, infoShown, assetDetail)
+                    }
+                    AnimatedVisibility(
+                        visible = stripShown,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    ) {
+                        Filmstrip(
+                            assets = assets,
+                            selectedIndex = safeIndex,
+                            client = client,
+                            imageLoader = imageLoader,
+                        )
+                    }
                 }
                 if (loadingBucket != null && !stripShown) {
                     Text(
@@ -998,6 +1086,61 @@ private fun formatDuration(ms: Long): String {
     val m = totalSec / 60
     val s = totalSec % 60
     return "%d:%02d".format(m, s)
+}
+
+/** Borderless edge-to-edge mosaic of square thumbnails; `index` is the d-pad cursor. */
+@Composable
+private fun PhotoGrid(
+    assets: List<AssetDto>,
+    selectedIndex: Int,
+    columns: Int,
+    client: dev.myimmich.tv.api.ImmichClient,
+    imageLoader: ImageLoader,
+    state: LazyGridState,
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(columns),
+        state = state,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        items(assets.size, key = { assets[it].id }) { i ->
+            val asset = assets[i]
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f),
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(dev.myimmich.tv.api.ImmichThumb(client.smallThumbUrl(asset.id)))
+                        .memoryCacheKey("thumb-${asset.id}")
+                        .build(),
+                    contentDescription = null,
+                    imageLoader = imageLoader,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                if (asset.isVideo) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(30.dp)
+                            .background(Color(0x8C000000), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("▶", color = Palette.Text, fontSize = 12.sp)
+                    }
+                }
+                if (i == selectedIndex) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .border(3.dp, Palette.Accent),
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
