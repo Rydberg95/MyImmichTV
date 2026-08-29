@@ -182,6 +182,8 @@ fun ViewerScreen(
     var gridShown by remember { mutableStateOf(true) }
     val gridState = rememberLazyGridState()
 
+    var remoteAsset by remember { mutableStateOf<AssetDto?>(null) }
+
     suspend fun loadMonth(bucket: String) {
         if (assetsByMonth.containsKey(bucket)) return
         loadingBucket = bucket
@@ -192,6 +194,18 @@ fun ViewerScreen(
                 SourceKind.ALBUM -> repo.albumMonthAssets(source.albumId ?: "", bucket)
                 SourceKind.SEARCH -> return
             }
+            // A month loaded out of order (e.g. after a remote "show" jumped to an
+            // old bucket and the lookahead fills the gap above it) inserts its
+            // assets BEFORE the cursor in the flattened list — shift the cursor so
+            // it keeps pointing at the same asset instead of a random neighbor.
+            val sortedMonths = if (months.contains(bucket)) months
+            else (months + bucket).sortedByDescending { it }
+            val precedingLoaded = sortedMonths.takeWhile { it != bucket }
+                .sumOf { assetsByMonth[it]?.size ?: 0 }
+            if (remoteAsset == null && assets.isNotEmpty() && index >= precedingLoaded) {
+                index += list.size
+            }
+            if (!months.contains(bucket)) months = sortedMonths
             assetsByMonth = assetsByMonth + (bucket to list)
         } catch (e: Exception) {
             if (isPinMismatch(e)) certChanged = true
@@ -280,7 +294,6 @@ fun ViewerScreen(
         }
     }
 
-    var remoteAsset by remember { mutableStateOf<AssetDto?>(null) }
     var pendingShowId by remember { mutableStateOf<String?>(null) }
     var pendingShowBucket by remember { mutableStateOf<String?>(null) }
     var pendingSearchAssets by remember { mutableStateOf<List<AssetDto>?>(null) }
