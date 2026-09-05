@@ -116,11 +116,14 @@ data class SmartSearchResponseDto(
 data class PersonDto(
     val id: String,
     val name: String? = null,
+    val isHidden: Boolean = false,
 )
 
 @Serializable
 data class PeopleResponseDto(
     val people: List<PersonDto> = emptyList(),
+    val hasNextPage: Boolean = false,
+    val total: Int = 0,
 )
 
 /** Tolerant shape of GET /api/assets/{id}; every field may be absent. */

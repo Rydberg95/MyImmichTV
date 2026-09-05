@@ -42,7 +42,7 @@ Everything in `tools/` is part of the repo (node deps: `cd tools && npm install`
 
 ---
 
-## Feature status (v0.7.4, 2026-09-05)
+## Feature status (v0.8.0, 2026-09-05)
 
 All items marked ✓ are **verified on the real box against the real Immich server**, usually via the pixel-analysis technique described under Testing.
 
@@ -67,7 +67,7 @@ All items marked ✓ are **verified on the real box against the real Immich serv
 - ✓ Screensaver info toggle: optional per-photo caption (date + place) with its own crossfade, off by default (⚙ in the SPA)
 - ✓ Rich info overlay (OK on a photo): full weekday date, place, camera + lens (junk lens strings hidden), exposure (f-stop / shutter / ISO / focal length), resolution + megapixels, filename — fetched per-asset from `GET /api/assets/{id}` and cached
 - ✓ **Times shown in the photo's own timezone** (viewer overlay + dream caption): Immich's `fileCreatedAt`/bucket timestamps are UTC wall-clocks (offset-less or `Z`), which displayed wrong by the location's offset; displays now use the asset detail's `localDateTime` — Immich's photo-local wall clock (same as the web UI). The dream fetches the detail per slide only when the info caption is on
-- ✗ People browsing (endpoint exists at `/r/{token}/people`, no UI yet)
+- ✓ **People browsing (v0.8.0)**: new source on the TV menu (Timeline / Favorites / Albums / **People** / Remote) and a People tab on the phone. Lists **named people** only (the library's unnamed ML face clusters are filtered out; `/api/people` is paginated at 500/page and ignores filters, so the client fetches all pages). Person selection happens in a face strip under the People menu tab — circular face thumbnails from `GET /api/people/{id}/thumbnail` (key-gated; proxied for the phone at `/r/{token}/face/{id}`) next to the name. A person's photos are a real bucketed source: `GET /api/timeline/buckets?personId=…` / `…/bucket?personId=…` return the same columnar shape as albums, so grid/slideshow/lazy month paging all work unchanged. Phone taps build a `person` context (`{source:'person', personId, personName, bucket}`) and the TV's `show` handler switches/jumps like albums do
 - ✗ TV-side settings UI (slideshow interval/shuffle only changeable from the phone or defaults)
 - ✗ Video seek/scrub from the phone (Range proxy exists; no preview player in the SPA)
 
@@ -136,9 +136,9 @@ Pairing: PIN shown on TV (also in `adb logcat -s ImmichTV:D`), `POST /api/pair {
 
 Phone-driven setup (`/setup/*`, all PIN-gated): `submit {pin,url,apiKey}` → TV probes TLS → `AWAITING_CONFIRM` with fingerprint (phone displays it) → `confirm {pin}` → TV validates key against `/api/users/me`, saves, `DONE` → phone auto-pairs.
 
-Viewer endpoints under `/r/{token}/`: `GET state`, `POST command`, `buckets[?album=|favorite=true]`, `assets?bucket=…[&album=|favorite=true]`, `albums`, `search?q=…`, `people`, `thumb/{id}?size=preview|thumbnail`, `original/{id}` (Range passthrough → 206 + Content-Range), `GET|POST settings`. `GET`/`POST` share the shape `{slideshowSeconds, dreamSeconds, dreamIncludeVideos, dreamShowInfo, dreamSources: [{kind: timeline|favorites|album, id?, name?}]}` — `POST` fields are all optional (null/absent = unchanged) and the response echoes the full updated settings; empty `dreamSources` = timeline (legacy single-source prefs migrate automatically). `state` carries `certChanged: true` when the TV's last library load hit a pin mismatch. `POST cert/reprobe` → live probe of the configured server (`{changed, fingerprint, subject, issuer, caIssuer, caFingerprint}`); `POST cert/confirm` → trusts the freshly probed chain (new leaf + CA pins), saves and rebuilds all clients without touching URL/key.
+Viewer endpoints under `/r/{token}/`: `GET state`, `POST command`, `buckets[?album=|person=|favorite=true]`, `assets?bucket=…[&album=|person=|favorite=true]`, `albums`, `people` (named only, each with `faceUrl`), `face/{personId}`, `search?q=…`, `thumb/{id}?size=preview|thumbnail`, `original/{id}` (Range passthrough → 206 + Content-Range), `GET|POST settings`. `GET`/`POST` share the shape `{slideshowSeconds, dreamSeconds, dreamIncludeVideos, dreamShowInfo, dreamSources: [{kind: timeline|favorites|album, id?, name?}]}` — `POST` fields are all optional (null/absent = unchanged) and the response echoes the full updated settings; empty `dreamSources` = timeline (legacy single-source prefs migrate automatically). `state` carries `certChanged: true` when the TV's last library load hit a pin mismatch. `POST cert/reprobe` → live probe of the configured server (`{changed, fingerprint, subject, issuer, caIssuer, caFingerprint}`); `POST cert/confirm` → trusts the freshly probed chain (new leaf + CA pins), saves and rebuilds all clients without touching URL/key.
 
-Commands: `{type: show|next|prev|slideshow|shuffle|info, assetId?, assetType?, value?, context?}` where `context = {source: timeline|favorites|album|search, albumId?, albumName?, bucket?, assets?}` — context is what makes the slideshow follow the phone's view.
+Commands: `{type: show|next|prev|slideshow|shuffle|info, assetId?, assetType?, value?, context?}` where `context = {source: timeline|favorites|album|person|search, albumId?, albumName?, personId?, personName?, bucket?, assets?}` — context is what makes the slideshow follow the phone's view.
 
 ---
 
@@ -301,7 +301,7 @@ Chronological; each bug is worth remembering because the *class* of it recurs.
 ## Known issues & TODO (prioritized)
 
 1. **Sessions die on app restart** — PIN rotates, tokens are memory-only. Every app reinstall/restart forces re-pairing. Fix direction: persist tokens in DataStore (accept the PIN rotation, keep tokens), or persist PIN + tokens.
-2. **People browsing** — endpoint ready, SPA tab missing.
+2. **People browsing on the screensaver** — people are browsable (v0.8.0) but not yet selectable as dream sources.
 3. **Shuffle** has no TV-remote key binding (phone-only). Media FF/REW were the planned keys.
 4. **TV settings UI** — intervals/shuffle/screensaver options are phone-only (⚙ in the SPA).
 5. **Video scrubbing from phone** — Range proxy works; SPA has no `<video>` preview.

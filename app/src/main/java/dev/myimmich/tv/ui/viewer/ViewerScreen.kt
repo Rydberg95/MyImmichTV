@@ -78,6 +78,7 @@ import coil3.request.ImageRequest
 import dev.myimmich.tv.api.AlbumDto
 import dev.myimmich.tv.api.AssetDetailDto
 import dev.myimmich.tv.api.AssetDto
+import dev.myimmich.tv.api.PersonDto
 import dev.myimmich.tv.data.AppSettings
 import dev.myimmich.tv.data.ServerConfig
 import dev.myimmich.tv.remote.RemoteCommand
@@ -99,9 +100,14 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.random.Random
 
-enum class SourceKind { TIMELINE, FAVORITES, ALBUM, SEARCH }
+enum class SourceKind { TIMELINE, FAVORITES, ALBUM, PERSON, SEARCH }
 
-data class LibrarySource(val kind: SourceKind, val label: String = "", val albumId: String? = null)
+data class LibrarySource(
+    val kind: SourceKind,
+    val label: String = "",
+    val albumId: String? = null,
+    val personId: String? = null,
+)
 
 @Composable
 fun ViewerScreen(
@@ -173,6 +179,8 @@ fun ViewerScreen(
     var menuCol by remember { mutableIntStateOf(0) }
     var albumCol by remember { mutableIntStateOf(0) }
     var albums by remember { mutableStateOf<List<AlbumDto>>(emptyList()) }
+    var personCol by remember { mutableIntStateOf(0) }
+    var people by remember { mutableStateOf<List<PersonDto>>(emptyList()) }
     var slideshowOn by remember { mutableStateOf(false) }
     var videoToggleTick by remember { mutableIntStateOf(0) }
     var videoError by remember { mutableStateOf<String?>(null) }
@@ -192,6 +200,7 @@ fun ViewerScreen(
                 SourceKind.TIMELINE -> repo.monthAssets(bucket)
                 SourceKind.FAVORITES -> repo.favoriteMonthAssets(bucket)
                 SourceKind.ALBUM -> repo.albumMonthAssets(source.albumId ?: "", bucket)
+                SourceKind.PERSON -> repo.personMonthAssets(source.personId ?: "", bucket)
                 SourceKind.SEARCH -> return
             }
             // A month loaded out of order (e.g. after a remote "show" jumped to an
@@ -215,14 +224,18 @@ fun ViewerScreen(
         }
     }
 
-    // On menu open: fetch albums once and land the cursor on the tab of the
-    // active source (album sources also pre-select their chip in the strip).
+    // On menu open: fetch albums/people once and land the cursor on the tab of the
+    // active source (album/person sources also pre-select their chip in the strip).
     var albumPositionPending by remember { mutableStateOf(false) }
+    var personPositionPending by remember { mutableStateOf(false) }
     LaunchedEffect(menuShown) {
         if (menuShown) {
             menuRow = 0
             if (albums.isEmpty()) {
                 albums = runCatching { repo.albums() }.getOrDefault(emptyList())
+            }
+            if (people.isEmpty()) {
+                people = runCatching { repo.people() }.getOrDefault(emptyList())
             }
             when (source.kind) {
                 SourceKind.TIMELINE -> menuCol = 0
@@ -235,10 +248,19 @@ fun ViewerScreen(
                         albumPositionPending = true
                     }
                 }
+                SourceKind.PERSON -> {
+                    if (people.isNotEmpty()) {
+                        menuCol = 3
+                        personCol = people.indexOfFirst { it.id == source.personId }.takeIf { it >= 0 } ?: personCol
+                    } else {
+                        personPositionPending = true
+                    }
+                }
                 SourceKind.SEARCH -> {}
             }
         } else {
             albumPositionPending = false
+            personPositionPending = false
         }
     }
     LaunchedEffect(albums.size) {
@@ -246,6 +268,13 @@ fun ViewerScreen(
             albumPositionPending = false
             menuCol = 2
             albumCol = albums.indexOfFirst { it.id == source.albumId }.takeIf { it >= 0 } ?: albumCol
+        }
+    }
+    LaunchedEffect(people.size) {
+        if (personPositionPending && people.isNotEmpty()) {
+            personPositionPending = false
+            menuCol = 3
+            personCol = people.indexOfFirst { it.id == source.personId }.takeIf { it >= 0 } ?: personCol
         }
     }
 
@@ -336,6 +365,7 @@ fun ViewerScreen(
                 SourceKind.TIMELINE -> repo.timelineBuckets()
                 SourceKind.FAVORITES -> repo.favoriteBuckets()
                 SourceKind.ALBUM -> repo.albumBuckets(source.albumId ?: "")
+                SourceKind.PERSON -> repo.personBuckets(source.personId ?: "")
                 SourceKind.SEARCH -> emptyList()
             }
             months = buckets.sortedByDescending { it.bucket }.map { it.bucket }
@@ -438,6 +468,20 @@ fun ViewerScreen(
                                     source = LibrarySource(SourceKind.ALBUM, ctx.albumName ?: "Album", ctx.albumId)
                                 }
                             }
+                            ctx != null && ctx.source == "person" && ctx.personId != null -> {
+                                if (source.kind == SourceKind.PERSON && source.personId == ctx.personId) {
+                                    jumpWithin(ctx.bucket)
+                                } else {
+                                    remoteAsset = overrideAsset(id, cmd.assetType)
+                                    pendingShowId = id
+                                    pendingShowBucket = ctx.bucket
+                                    source = LibrarySource(
+                                        SourceKind.PERSON,
+                                        ctx.personName ?: "Person",
+                                        personId = ctx.personId,
+                                    )
+                                }
+                            }
                             ctx != null && ctx.source == "favorites" -> {
                                 if (source.kind == SourceKind.FAVORITES) {
                                     jumpWithin(ctx.bucket)
@@ -538,17 +582,33 @@ fun ViewerScreen(
                 if (menuShown) {
                     when (e.key) {
                         Key.DirectionLeft -> {
-                            if (menuRow == 0) menuCol = (menuCol - 1).coerceAtLeast(0)
-                            else albumCol = (albumCol - 1).coerceAtLeast(0)
+                            when {
+                                menuRow == 0 -> menuCol = (menuCol - 1).coerceAtLeast(0)
+                                menuCol == 2 -> albumCol = (albumCol - 1).coerceAtLeast(0)
+                                else -> personCol = (personCol - 1).coerceAtLeast(0)
+                            }
                             true
                         }
                         Key.DirectionRight -> {
-                            if (menuRow == 0) menuCol = (menuCol + 1).coerceAtMost(3)
-                            else albumCol = (albumCol + 1).coerceAtMost((albums.size - 1).coerceAtLeast(0))
+                            when {
+                                menuRow == 0 -> menuCol = (menuCol + 1).coerceAtMost(4)
+                                menuCol == 2 -> albumCol = (albumCol + 1).coerceAtMost((albums.size - 1).coerceAtLeast(0))
+                                else -> personCol = (personCol + 1).coerceAtMost((people.size - 1).coerceAtLeast(0))
+                            }
                             true
                         }
                         Key.DirectionDown -> {
-                            if (menuRow == 0 && menuCol == 2 && albums.isNotEmpty()) menuRow = 1 else menuShown = false
+                            when {
+                                menuRow == 0 && menuCol == 2 && albums.isNotEmpty() -> menuRow = 1
+                                menuRow == 0 && menuCol == 3 && people.isNotEmpty() -> {
+                                    menuRow = 1
+                                    if (people.isNotEmpty()) {
+                                        personCol = people.indexOfFirst { it.id == source.personId }
+                                            .takeIf { it >= 0 } ?: 0
+                                    }
+                                }
+                                else -> menuShown = false
+                            }
                             true
                         }
                         Key.DirectionUp -> {
@@ -574,6 +634,11 @@ fun ViewerScreen(
                                         menuRow = 1
                                         albumCol = 0
                                     }
+                                    3 -> {
+                                        menuRow = 1
+                                        personCol = people.indexOfFirst { it.id == source.personId }
+                                            .takeIf { it >= 0 } ?: 0
+                                    }
                                     else -> {
                                         menuShown = false
                                         pairingShown = true
@@ -582,13 +647,31 @@ fun ViewerScreen(
                                     }
                                 }
                             } else {
-                                val album = albums.getOrNull(albumCol)
-                                if (album != null) {
-                                    source = LibrarySource(SourceKind.ALBUM, album.albumName, album.id)
-                                    index = 0
-                                    gridShown = true
-                                    menuShown = false
-                                    menuRow = 0
+                                when (menuCol) {
+                                    2 -> {
+                                        val album = albums.getOrNull(albumCol)
+                                        if (album != null) {
+                                            source = LibrarySource(SourceKind.ALBUM, album.albumName, album.id)
+                                            index = 0
+                                            gridShown = true
+                                            menuShown = false
+                                            menuRow = 0
+                                        }
+                                    }
+                                    else -> {
+                                        val person = people.getOrNull(personCol)
+                                        if (person != null) {
+                                            source = LibrarySource(
+                                                SourceKind.PERSON,
+                                                person.name.orEmpty(),
+                                                personId = person.id,
+                                            )
+                                            index = 0
+                                            gridShown = true
+                                            menuShown = false
+                                            menuRow = 0
+                                        }
+                                    }
                                 }
                             }
                             true
@@ -763,9 +846,15 @@ fun ViewerScreen(
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             val albumListState = rememberLazyListState()
+            val personListState = rememberLazyListState()
             LaunchedEffect(menuRow, albumCol, albums.size, menuCol) {
                 if (albums.isNotEmpty() && (menuRow == 1 || (menuRow == 0 && menuCol == 2))) {
                     albumListState.animateScrollToItem(albumCol.coerceIn(0, albums.size - 1))
+                }
+            }
+            LaunchedEffect(menuRow, personCol, people.size, menuCol) {
+                if (people.isNotEmpty() && (menuRow == 1 || (menuRow == 0 && menuCol == 3))) {
+                    personListState.animateScrollToItem(personCol.coerceIn(0, people.size - 1))
                 }
             }
             Column(
@@ -789,12 +878,14 @@ fun ViewerScreen(
                         "Timeline",
                         "Favorites",
                         "Albums",
+                        "People",
                         "Remote",
                     ).forEachIndexed { col, item ->
                         val selected = when (col) {
                             0 -> source.kind == SourceKind.TIMELINE
                             1 -> source.kind == SourceKind.FAVORITES
                             2 -> source.kind == SourceKind.ALBUM
+                            3 -> source.kind == SourceKind.PERSON
                             else -> false
                         }
                         MenuTab(
@@ -820,6 +911,28 @@ fun ViewerScreen(
                                 name = album.albumName,
                                 cursor = menuRow == 1 && albumCol == col,
                                 active = source.kind == SourceKind.ALBUM && source.albumId == album.id,
+                            )
+                        }
+                    }
+                }
+                // Person strip (face + name) is only shown while the People tab is focused
+                AnimatedVisibility(
+                    visible = menuCol == 3 && people.isNotEmpty(),
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut(),
+                ) {
+                    LazyRow(
+                        state = personListState,
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        itemsIndexed(people, key = { _, p -> p.id }) { col, person ->
+                            PersonChip(
+                                name = person.name.orEmpty(),
+                                faceUrl = client.personFaceUrl(person.id),
+                                imageLoader = imageLoader,
+                                cursor = menuRow == 1 && personCol == col,
+                                active = source.kind == SourceKind.PERSON && source.personId == person.id,
                             )
                         }
                     }
@@ -900,6 +1013,66 @@ private fun AlbumChip(name: String, cursor: Boolean, active: Boolean) {
             )
             .padding(horizontal = 16.dp, vertical = 9.dp),
     )
+}
+
+@Composable
+private fun PersonChip(
+    name: String,
+    faceUrl: String,
+    imageLoader: ImageLoader,
+    cursor: Boolean,
+    active: Boolean,
+) {
+    val scale by animateFloatAsState(if (cursor) 1.07f else 1f, label = "personScale")
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(50))
+            .background(
+                when {
+                    cursor -> Palette.Accent
+                    active -> Palette.Accent.copy(alpha = 0.14f)
+                    else -> Palette.Surface2
+                },
+            )
+            .then(
+                if (active && !cursor) {
+                    Modifier.border(1.dp, Palette.Accent.copy(alpha = 0.5f), RoundedCornerShape(50))
+                } else Modifier
+            )
+            .padding(4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Palette.Surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(dev.myimmich.tv.api.ImmichThumb(faceUrl))
+                    .memoryCacheKey("face-$name")
+                    .build(),
+                contentDescription = null,
+                imageLoader = imageLoader,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Text(
+            name,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (cursor || active) FontWeight.SemiBold else FontWeight.Normal,
+            color = when {
+                cursor -> Palette.OnAccent
+                active -> Palette.AccentBright
+                else -> Palette.TextSoft
+            },
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+        )
+    }
 }
 
 @Composable

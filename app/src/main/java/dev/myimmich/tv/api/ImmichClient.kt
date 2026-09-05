@@ -129,8 +129,19 @@ class ImmichClient(
         }
     }
 
-    suspend fun people(): List<PersonDto> =
-        json.decodeFromString<PeopleResponseDto>(getJson("api/people")).people
+    /** Named people across all /api/people pages (server pages at 500 and ignores filters). */
+    suspend fun people(): List<PersonDto> {
+        val all = mutableListOf<PersonDto>()
+        var page = 1
+        while (true) {
+            val resp = json.decodeFromString<PeopleResponseDto>(getJson("api/people", mapOf("page" to page.toString())))
+            all += resp.people
+            if (!resp.hasNextPage || resp.people.isEmpty()) break
+            page++
+            if (page > 50) break // safety bound
+        }
+        return all
+    }
 
     suspend fun assetDetail(assetId: String): AssetDetailDto =
         json.decodeFromString<AssetDetailDto>(getJson("api/assets/$assetId"))
@@ -138,4 +149,5 @@ class ImmichClient(
     fun thumbnailUrl(assetId: String): String = "$serverUrl/api/assets/$assetId/thumbnail?size=preview"
     fun smallThumbUrl(assetId: String): String = "$serverUrl/api/assets/$assetId/thumbnail?size=thumbnail"
     fun originalUrl(assetId: String): String = "$serverUrl/api/assets/$assetId/original"
+    fun personFaceUrl(personId: String): String = "$serverUrl/api/people/$personId/thumbnail"
 }

@@ -8,6 +8,8 @@
     tab: 'timeline',
     albumId: null,
     albumName: null,
+    personId: null,
+    personName: null,
     assets: [],
     tv: null,
   };
@@ -39,6 +41,9 @@
     }
     if (state.tab === 'albums' && state.albumId) {
       return { source: 'album', albumId: state.albumId, albumName: state.albumName, bucket: bucket };
+    }
+    if (state.tab === 'people' && state.personId) {
+      return { source: 'person', personId: state.personId, personName: state.personName, bucket: bucket };
     }
     return { source: 'timeline', bucket: bucket };
   }
@@ -110,6 +115,7 @@
   function sourceParams() {
     if (state.tab === 'favorites') return '&favorite=true';
     if (state.tab === 'albums' && state.albumId) return '&album=' + encodeURIComponent(state.albumId);
+    if (state.tab === 'people' && state.personId) return '&person=' + encodeURIComponent(state.personId);
     return '';
   }
 
@@ -135,6 +141,7 @@
     let q = '';
     if (state.tab === 'favorites') q = '?favorite=true';
     else if (state.tab === 'albums' && state.albumId) q = '?album=' + encodeURIComponent(state.albumId);
+    else if (state.tab === 'people' && state.personId) q = '?person=' + encodeURIComponent(state.personId);
     try {
       const buckets = (await api('/buckets' + q))
         .filter((m) => m.count > 0)
@@ -339,6 +346,52 @@
     } catch (e) { console.error(e); }
   }
 
+  async function renderPeople() {
+    clearStream();
+    try {
+      const people = await api('/people');
+      mainEl.innerHTML = '';
+      if (!people.length) {
+        mainEl.innerHTML = '<div class="empty">No named people yet</div>';
+        return;
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'people';
+      people.forEach((p) => {
+        const d = document.createElement('div');
+        d.className = 'person';
+        d.dataset.initial = (p.name || '?').trim().charAt(0).toUpperCase() || '?';
+        if (p.faceUrl) {
+          const img = document.createElement('img');
+          img.className = 'person-face';
+          img.loading = 'lazy';
+          img.alt = '';
+          img.src = p.faceUrl;
+          img.addEventListener('error', () => {
+            img.remove();
+            d.classList.add('noimg');
+          });
+          d.appendChild(img);
+        } else {
+          d.classList.add('noimg');
+        }
+        const meta = document.createElement('div');
+        meta.className = 'person-meta';
+        const h = document.createElement('h3');
+        h.textContent = p.name;
+        meta.appendChild(h);
+        d.appendChild(meta);
+        d.addEventListener('click', () => {
+          state.personId = p.id;
+          state.personName = p.name;
+          loadStream();
+        });
+        wrap.appendChild(d);
+      });
+      mainEl.appendChild(wrap);
+    } catch (e) { console.error(e); }
+  }
+
   function renderSearch() {
     clearStream();
     const bar = document.createElement('div');
@@ -475,6 +528,8 @@
       state.tab = btn.dataset.tab;
       state.albumId = null;
       state.albumName = null;
+      state.personId = null;
+      state.personName = null;
       state.assets = [];
       document.querySelectorAll('nav button').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
@@ -482,6 +537,8 @@
         renderSearch();
       } else if (state.tab === 'albums') {
         renderAlbums();
+      } else if (state.tab === 'people') {
+        renderPeople();
       } else {
         loadStream();
       }
@@ -651,7 +708,7 @@
     }
     const now = $('#nowPlaying');
     if (state.tv && state.tv.assetId) {
-      const src = state.tv.source === 'ALBUM' ? state.tv.label
+      const src = (state.tv.source === 'ALBUM' || state.tv.source === 'PERSON') ? state.tv.label
         : state.tv.source.charAt(0) + state.tv.source.slice(1).toLowerCase();
       now.textContent = 'Showing ' + (state.tv.index + 1) + ' / ' + state.tv.total + ' · ' + src;
     } else {

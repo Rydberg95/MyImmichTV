@@ -17,6 +17,8 @@ data class RemoteCommandContext(
     val source: String,
     val albumId: String? = null,
     val albumName: String? = null,
+    val personId: String? = null,
+    val personName: String? = null,
     val bucket: String? = null,
     val assets: List<RemoteAsset>? = null,
 )
@@ -66,6 +68,7 @@ data class RemoteAsset(
 data class RemotePerson(
     val id: String,
     val name: String,
+    val faceUrl: String? = null,
 )
 
 fun RemoteAsset.toAssetDto() = dev.myimmich.tv.api.AssetDto(

@@ -304,12 +304,14 @@ class RemoteServer(
             get("/r/{token}/buckets") {
                 val client = authorizedClient(call) ?: return@get
                 val albumId = call.request.queryParameters["album"]
+                val personId = call.request.queryParameters["person"]
                 val favorite = call.request.queryParameters["favorite"] == "true"
                 val buckets = client.timeBuckets(
                     buildMap {
                         put("size", "MONTH")
                         put("isArchived", "false")
                         if (albumId != null) put("albumId", albumId)
+                        if (personId != null) put("personId", personId)
                         if (favorite) put("isFavorite", "true")
                     }
                 )
@@ -321,6 +323,7 @@ class RemoteServer(
                     call.respond(HttpStatusCode.BadRequest); return@get
                 }
                 val albumId = call.request.queryParameters["album"]
+                val personId = call.request.queryParameters["person"]
                 val favorite = call.request.queryParameters["favorite"] == "true"
                 val assets = client.bucketAssets(
                     buildMap {
@@ -328,6 +331,7 @@ class RemoteServer(
                         put("timeBucket", bucket)
                         put("isArchived", "false")
                         if (albumId != null) put("albumId", albumId)
+                        if (personId != null) put("personId", personId)
                         if (favorite) put("isFavorite", "true")
                     }
                 )
@@ -349,8 +353,21 @@ class RemoteServer(
             }
             get("/r/{token}/people") {
                 val client = authorizedClient(call) ?: return@get
+                val token = call.parameters["token"].orEmpty()
                 val people = client.people()
-                call.respond(people.map { RemotePerson(it.id, it.name ?: "Unknown") })
+                    .filter { !it.isHidden && !it.name.isNullOrBlank() }
+                    .map { RemotePerson(it.id, it.name.orEmpty(), "/r/$token/face/${it.id}") }
+                call.respond(people)
+            }
+            get("/r/{token}/face/{id}") {
+                val config = currentConfig
+                if (!authorized(call) || config == null) {
+                    call.respond(HttpStatusCode.ServiceUnavailable); return@get
+                }
+                val id = call.parameters["id"] ?: run {
+                    call.respond(HttpStatusCode.BadRequest); return@get
+                }
+                proxyImage(call, proxyClient!!.personFaceUrl(id), config)
             }
             get("/r/{token}/thumb/{id}") {
                 val config = currentConfig
