@@ -5,7 +5,7 @@ A borderless, fullscreen-first Android TV app for browsing an [Immich](https://i
 | | |
 |---|---|
 | **TV box** | Xiaomi TV Box S (3rd Gen) — Amlogic S905X5M, Google TV 14 (API 34), **2 GB RAM**, HW decode HEVC/AV1/VP9 up to 4K |
-| **Immich** | v3.1.0 behind a reverse proxy, **self-signed TLS** (chain issuer `CN=rydberg_local - ECC Intermediate`) |
+| **Immich** | v3.1.0 behind a reverse proxy, self-signed TLS (leaf `CN=immich.rydberg.lan` signed directly by the static root `CN=rydberg_local`, valid to Sep 2034 — Caddy's auto-rekeyed intermediate was replaced by a static cert for this host on 2026-09-05 because the intermediate rekeyed weekly and tripped the pin-mismatch warning) |
 | **Server** | `https://immich.rydberg.lan` (LAN DNS → 192.168.50.142) |
 
 The phone never talks to Immich directly — everything is proxied through the TV app over plain LAN HTTP, so the self-signed cert problem is solved exactly once, inside the TV.
