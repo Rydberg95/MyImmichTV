@@ -42,7 +42,7 @@ Everything in `tools/` is part of the repo (node deps: `cd tools && npm install`
 
 ---
 
-## Feature status (v0.7.3, 2026-08-29)
+## Feature status (v0.7.4, 2026-09-05)
 
 All items marked ✓ are **verified on the real box against the real Immich server**, usually via the pixel-analysis technique described under Testing.
 
@@ -54,7 +54,7 @@ All items marked ✓ are **verified on the real box against the real Immich serv
 - ✓ Video playback with sound (Media3 ExoPlayer), correct pillarbox geometry for portrait videos, OK = play/pause
 - ✓ Unsupported video formats (e.g. 4K60 H.264 High@L5.2, which the box's AVC decoder rejects) show an on-screen message with codec, profile/level and resolution instead of a black screen; slideshow skips past them
 - ✓ Slideshow: auto-advance (10 s default), shuffle; videos advance on completion
-- ✓ Phone remote: QR + PIN pairing, timeline/favorites/albums browsing, smart search, tap-to-display with context (slideshow follows what the phone is browsing), prev/next/play/shuffle/info controls, 2 s state polling
+- ✓ Phone remote: QR + PIN pairing (QR carries the PIN — scanning auto-pairs, even over a stale token from a previous TV session, v0.7.4), timeline/favorites/albums browsing, smart search, tap-to-display with context (slideshow follows what the phone is browsing), prev/next/play/shuffle/info controls, 2 s state polling
 - ✓ Phone timeline is an **endless scroll** (months load on demand in both directions, scroll-anchored so prepending never jumps) with a right-edge **year/month rail scrubber** (photo-count-proportional thumb, year ticks, drag or tap to jump)
 - ✓ Phone-driven first-run setup: scan QR on setup screen, type URL + API key on the phone, confirm cert fingerprint on the phone, TV saves config
 - ✓ Self-signed TLS pinning: setup pins the **issuing CA** (SPKI SHA-256 + cert fingerprint) in addition to the leaf, so servers whose leaves auto-renew (the Caddy local CA here rotates leaf certs every 12 h) keep working without re-setup; hostname verification relaxed only while pinning is active

@@ -62,7 +62,7 @@
   function logout() {
     localStorage.removeItem('tv_token');
     state.token = null;
-    location.hash = '';
+    history.replaceState(null, '', location.pathname);
     showPair();
   }
 
@@ -88,7 +88,7 @@
     const data = await r.json();
     state.token = data.token;
     localStorage.setItem('tv_token', data.token);
-    location.hash = '';
+    history.replaceState(null, '', location.pathname);
     showApp();
   }
 
@@ -848,7 +848,8 @@
     document.body.appendChild(el);
   });
 
-  const hashPin = (location.hash || '').replace(/^#/, '').trim();
+  const hashPin = (location.hash || '').replace(/^#/, '').trim()
+    || new URLSearchParams(location.search).get('pin');
 
   async function boot() {
     let status = null;
@@ -859,9 +860,18 @@
       showSetup(hashPin);
       return;
     }
-    if (hashPin && !state.token) {
+    if (hashPin) {
+      // A PIN from the QR code is authoritative — it beats a stale stored
+      // token (TV tokens die on every app restart, the phone's doesn't).
+      if (state.token) {
+        localStorage.removeItem('tv_token');
+        state.token = null;
+      }
       $('#pinInput').value = hashPin;
-      pair(hashPin).catch(() => { $('#pairError').textContent = 'Wrong PIN'; });
+      pair(hashPin).catch(() => {
+        $('#pairError').textContent = 'Wrong PIN';
+        showPair();
+      });
     } else if (state.token) {
       fetch(`/r/${state.token}/state`).then((r) => {
         if (r.ok) showApp(); else logout();

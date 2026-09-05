@@ -122,7 +122,9 @@ class RemoteServer(
 
     fun pairingUrl(): String {
         val ip = lanIpAddress() ?: "192.168.50.1"
-        return "http://$ip:${controller.serverPort}/#${controller.pin}"
+        // PIN as a query param (not a #fragment): some phone camera/scanner
+        // apps strip fragments when opening a scanned URL; the SPA accepts both.
+        return "http://$ip:${controller.serverPort}/?pin=${controller.pin}"
     }
 
     private fun Application.module() {
